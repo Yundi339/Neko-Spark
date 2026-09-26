@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GalleryMirror" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/gm_bg</item>
+        <item name="android:colorPrimary">@color/gm_accent</item>
+        <item name="android:colorPrimaryDark">@color/gm_bg</item>
+        <item name="android:colorAccent">@color/gm_accent</item>
+        <item name="android:statusBarColor">@color/gm_bg</item>
+        <item name="android:navigationBarColor">@color/gm_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:textColorPrimary">@color/gm_text</item>
+        <item name="android:textColorHint">@color/gm_text_dim</item>
+    </style>
+</resources>

@@ -1,0 +1,724 @@
+package com.gallerymirror.app
+
+import android.Manifest
+import android.app.AlertDialog
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Bundle
+import android.text.method.ScrollingMovementMethod
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : ComponentActivity() {
+
+    private val prefs by lazy { getSharedPreferences("gallery_mirror", MODE_PRIVATE) }
+    private lateinit var urlInput: EditText
+    private lateinit var identityText: TextView
+    private lateinit var statusText: TextView
+    private lateinit var progressBar: ProgressBar
+    private lateinit var mascotView: ImageView
+    private lateinit var logText: TextView
+    private lateinit var scanButton: Button
+    private lateinit var backupButton: Button
+    private lateinit var restoreButton: Button
+    private var afterPermission: (() -> Unit)? = null
+
+    private val colorText: Int get() = ContextCompat.getColor(this, R.color.gm_text)
+    private val colorDim: Int get() = ContextCompat.getColor(this, R.color.gm_text_dim)
+    private val colorAccent: Int get() = ContextCompat.getColor(this, R.color.gm_accent)
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            val granted = grants.values.any { it }
+            log(if (granted) "相册权限已授予" else "相册权限被拒绝，请在系统设置里手动开启")
+            val action = afterPermission
+            afterPermission = null
+            if (granted) action?.invoke()
+        }
+
+    /**
+     * 通知权限：**只影响能不能在通知栏看进度**，
+     * 拒绝了传输照样在后台跑，所以绝不能拿它卡住流程。
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            log(
+                if (granted) "通知权限已授予：后台传输时可在通知栏看进度、点一下回到本页"
+                else "未授予通知权限：传输照常在后台进行，只是通知栏看不到进度"
+            )
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(14))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#F2F8FF"), Color.parseColor("#E7F3FF"))
+            )
+        }
+
+        // ---------- 顶部：贴图 + 标题 ----------
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        mascotView = ImageView(this).apply {
+            setImageResource(R.drawable.mascot_hi)
+            // 打包进来的用户贴图优先（构建时从电脑端数据目录复制）
+            Stickers.firstBitmap(this@MainActivity)?.let { setImageBitmap(it) }
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        header.addView(mascotView, LinearLayout.LayoutParams(dp(64), dp(64)).apply { rightMargin = dp(12) })
+
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titles.addView(TextView(this).apply {
+            text = "Neko_Spark"
+            textSize = 20f
+            setTextColor(colorText)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        titles.addView(TextView(this).apply {
+            text = "手机 ⇄ 电脑双向迁移 · 数据留在你手里"
+            textSize = 12f
+            setTextColor(colorDim)
+        })
+        header.addView(titles)
+        root.addView(header)
+
+        // ---------- 卡片：地址 + 按钮 ----------
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_card)
+            setPadding(dp(14), dp(14), dp(14), dp(16))
+        }
+        card.addView(TextView(this).apply {
+            text = "电脑端服务地址"
+            textSize = 12f
+            setTextColor(colorDim)
+        })
+        urlInput = EditText(this).apply {
+            setText(prefs.getString("hub_url", defaultHubUrl()))
+            hint = "http://192.168.x.x:8787"
+            textSize = 15f
+            setTextColor(colorText)
+            setHintTextColor(colorDim)
+            setSingleLine()
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_input)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val searchButton = styledButton("搜索电脑", primary = false).apply {
+            setOnClickListener { searchHubs() }
+        }
+        val urlRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        urlRow.addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        urlRow.addView(
+            searchButton,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                leftMargin = dp(8)
+            }
+        )
+        card.addView(
+            urlRow,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+            }
+        )
+
+        card.addView(TextView(this).apply {
+            text = "设备身份（我是哪台手机）"
+            textSize = 12f
+            setTextColor(colorDim)
+            setPadding(0, dp(12), 0, 0)
+        })
+        identityText = TextView(this).apply {
+            textSize = 14f
+            setTextColor(colorText)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_input)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setOnClickListener { pickDeviceIdentity() }
+        }
+        card.addView(
+            identityText,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+        )
+        card.addView(TextView(this).apply {
+            text = "点击可改名，或从电脑端已有的设备里认领一台（避免同一台手机重复建号）"
+            textSize = 11f
+            setTextColor(colorDim)
+            setPadding(0, dp(4), 0, 0)
+        })
+
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+        }
+        val connectButton = styledButton("测试连接", primary = false)
+        scanButton = styledButton("扫描相册", primary = false)
+        backupButton = styledButton("开始备份", primary = true)
+        for ((index, button) in listOf(connectButton, scanButton, backupButton).withIndex()) {
+            buttonRow.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (index > 0) leftMargin = dp(8)
+            })
+        }
+        card.addView(buttonRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+
+        // ---------- 第二行：电脑 → 手机（迁移/恢复） ----------
+        restoreButton = styledButton("从电脑恢复（迁移回手机）", primary = false)
+        card.addView(
+            restoreButton,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+        )
+
+        root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
+
+        // ---------- 状态 + 进度条 ----------
+        statusText = TextView(this).apply {
+            text = "就绪"
+            textSize = 13f
+            setTextColor(colorAccent)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        root.addView(statusText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
+
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            visibility = View.GONE
+            progressTintList = android.content.res.ColorStateList.valueOf(colorAccent)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#E3F1FF"))
+        }
+        root.addView(
+            progressBar,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply { topMargin = dp(6) }
+        )
+
+        // ---------- 日志卡片 ----------
+        logText = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            setTextColor(colorText)
+            movementMethod = ScrollingMovementMethod()
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_card)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setLineSpacing(dp(3).toFloat(), 1f)
+        }
+        root.addView(logText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+
+        setContentView(root)
+        observeSyncState()
+
+        connectButton.setOnClickListener { testConnection() }
+        scanButton.setOnClickListener { ensurePermissionThen { scanAlbum() } }
+        backupButton.setOnClickListener { startBackup() }
+        restoreButton.setOnClickListener { ensurePermissionThen { startRestore() } }
+
+        log("提示：USB 连接时先在电脑执行 adb reverse tcp:8787 tcp:8787，地址填 http://127.0.0.1:8787")
+        log("手机 → 电脑：点「开始备份」；电脑 → 手机：点「从电脑恢复」")
+
+        // 自动化测试入口：am start ... --ez autorun true [--es hub http://xxx:8787]
+        intent?.getStringExtra("hub")?.let { urlInput.setText(it) }
+        updateIdentity()
+        if (intent?.getBooleanExtra("searchhubs", false) == true) {
+            logText.postDelayed({ searchHubs() }, 500)
+        }
+        if (intent?.getBooleanExtra("autorun", false) == true) {
+            logText.postDelayed({ runBackup(saveUrl()) }, 400)
+        }
+        // 自动化测试入口：am start ... --ez restore true [--es restoremode merge|new] [--es restorefolder 名字]
+        if (intent?.getBooleanExtra("restore", false) == true) {
+            val mode = if (intent.getStringExtra("restoremode") == "new") {
+                RestoreRunner.Mode.NEW_FOLDER
+            } else {
+                RestoreRunner.Mode.MERGE
+            }
+            val folder = intent.getStringExtra("restorefolder") ?: ""
+            logText.postDelayed({ ensurePermissionThen { autoRestore(saveUrl(), mode, folder) } }, 500)
+        }
+    }
+
+    /** 搜索局域网里的电脑端 Hub（一个局域网可能有多台） */
+    private fun searchHubs() {
+        statusText.text = "搜索局域网里的电脑..."
+        lifecycleScope.launch {
+            val found = withContext(Dispatchers.IO) { HubDiscovery.search(this@MainActivity) }
+            statusText.text = "就绪"
+            if (found.isEmpty()) {
+                log("没有搜索到电脑。请确认：电脑端程序正在运行、手机与电脑连同一个 WiFi；也可以手动填地址。")
+                return@launch
+            }
+            val labels = found.map { "${it.name}（${it.host}:${it.port}）" }.toTypedArray()
+            runOnUiThread {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("选择要连接的电脑（找到 ${found.size} 台）")
+                    .setItems(labels) { _, which ->
+                        val target = found[which]
+                        urlInput.setText(target.url)
+                        saveUrl()
+                        log("已选择电脑：${target.name}  ${target.url}")
+                        testConnection()
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun autoName(): String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+
+    /** 当前身份摘要：是否认领了电脑端已有设备 */
+    private fun updateIdentity() {
+        val bound = prefs.getString("bound_device_id", null)
+        val name = prefs.getString("device_name", null)?.takeIf { it.isNotBlank() } ?: autoName()
+        identityText.text = if (bound.isNullOrBlank()) "$name（自动识别）" else "$name（已认领电脑端已有设备）"
+    }
+
+    /** 选择设备身份：改名 / 新建 / 认领电脑端已有设备 */
+    private fun pickDeviceIdentity() {
+        val url = saveUrl()
+        lifecycleScope.launch {
+            val devices = try {
+                withContext(Dispatchers.IO) { HubClient(url).devices() }
+            } catch (e: Exception) {
+                log("获取电脑端设备列表失败：${e.message}")
+                emptyList()
+            }
+            val options = mutableListOf(
+                "修改这台手机的名字",
+                "新建设备（用本机自动识别）"
+            )
+            for (d in devices) options.add("认领为「${d.name}」（${d.mediaCount} 项）")
+
+            runOnUiThread {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("我是哪台手机？")
+                    .setItems(options.toTypedArray()) { _, which ->
+                        when (which) {
+                            0 -> promptRename()
+                            1 -> {
+                                prefs.edit().remove("bound_device_id").apply()
+                                updateIdentity()
+                                log("设备身份：新建（自动识别），名称 ${prefs.getString("device_name", null) ?: autoName()}")
+                            }
+                            else -> {
+                                val device = devices[which - 2]
+                                prefs.edit()
+                                    .putString("bound_device_id", device.id)
+                                    .putString("device_name", device.name)
+                                    .apply()
+                                updateIdentity()
+                                log("设备身份：已认领电脑端设备「${device.name}」，下次备份会记录到这台下面")
+                            }
+                        }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun promptRename() {
+        val input = EditText(this).apply {
+            setText(prefs.getString("device_name", null)?.takeIf { it.isNotBlank() } ?: autoName())
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("这台手机叫什么名字")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    prefs.edit().putString("device_name", name).apply()
+                    updateIdentity()
+                    log("设备名已改为「$name」（下次备份同步到电脑端）")
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun styledButton(label: String, primary: Boolean): Button = Button(this).apply {
+        text = label
+        textSize = 13f
+        isAllCaps = false
+        stateListAnimator = null
+        background = ContextCompat.getDrawable(
+            this@MainActivity,
+            if (primary) R.drawable.bg_primary else R.drawable.bg_secondary
+        )
+        setTextColor(if (primary) Color.WHITE else colorAccent)
+        setPadding(dp(4), dp(10), dp(4), dp(10))
+    }
+
+    /**
+     * 模拟器里 10.0.2.2 就是宿主机，可以直接用。
+     * 真机没有可猜的默认值（每家的网段都不一样），给一个**示例地址**占位，
+     * 供用户改成自己电脑的局域网地址 —— 界面上那个输入框的 hint 也是这么写的。
+     */
+    private fun defaultHubUrl(): String {
+        val isEmulator = Build.FINGERPRINT.contains("generic") ||
+            Build.FINGERPRINT.contains("emulator") ||
+            Build.MODEL.contains("sdk", ignoreCase = true) ||
+            Build.PRODUCT.contains("sdk", ignoreCase = true)
+        return if (isEmulator) "http://10.0.2.2:8787" else "http://192.168.1.5:8787"
+    }
+
+    private fun saveUrl(): String {
+        val url = urlInput.text.toString().trim().ifEmpty { defaultHubUrl() }
+        prefs.edit().putString("hub_url", url).apply()
+        return url
+    }
+
+    private fun testConnection() {
+        val url = saveUrl()
+        statusText.text = "测试连接中..."
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { HubClient(url).health() }
+                statusText.text = "连接成功"
+                log("连接成功：$result")
+                loadMascotFromHub(url)
+            } catch (e: Exception) {
+                statusText.text = "连接失败"
+                log("连接失败：${e.message}")
+            }
+        }
+    }
+
+    /** 电脑端设置了本地贴图时，手机端显示同一套图 */
+    private fun loadMascotFromHub(url: String) {
+        lifecycleScope.launch {
+            try {
+                val bitmap = withContext(Dispatchers.IO) {
+                    val client = HubClient(url)
+                    val stickers = client.stickerUrls()
+                    if (stickers.isEmpty()) null else client.fetchBitmap(stickers.first())
+                }
+                if (bitmap != null) runOnUiThread { mascotView.setImageBitmap(bitmap) }
+            } catch (_: Exception) {
+                // 保持内置贴图
+            }
+        }
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        val list = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            list.add(Manifest.permission.READ_MEDIA_IMAGES)
+            list.add(Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        return list.toTypedArray()
+    }
+
+    private fun ensurePermissionThen(action: () -> Unit) {
+        val missing = requiredPermissions().filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) {
+            action()
+        } else {
+            afterPermission = action
+            permissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun scanAlbum() {
+        statusText.text = "扫描相册中..."
+        lifecycleScope.launch {
+            try {
+                val entries = withContext(Dispatchers.IO) { MediaScanner.scan(this@MainActivity) }
+                val images = entries.count { it.kind == "image" }
+                val videos = entries.count { it.kind == "video" }
+                statusText.text = "共 ${entries.size} 个文件（图片 $images / 视频 $videos）"
+                log("扫描完成：共 ${entries.size} 个文件（图片 $images 个，视频 $videos 个）")
+                val byAlbum = entries
+                    .groupBy { it.bucketName.ifBlank { "未分类" } }
+                    .map { (name, list) -> name to list.size }
+                    .sortedByDescending { it.second }
+                log("按相册分类（共 ${byAlbum.size} 个相册）：")
+                for ((name, count) in byAlbum) {
+                    log("  · $name：$count 个")
+                }
+            } catch (e: Exception) {
+                statusText.text = "扫描失败"
+                log("扫描失败：${e.message}")
+            }
+        }
+    }
+
+    /** 任务跑在前台服务里，这里只是读它的状态 */
+    private val running: Boolean get() = SyncService.state.value.running
+
+    /** 订阅同步状态：界面只负责显示，Activity 重建后也能接着显示进度 */
+    private fun observeSyncState() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SyncService.state.collect { state -> renderSyncState(state) }
+            }
+        }
+    }
+
+    private var lastSummary = ""
+
+    private fun renderSyncState(state: SyncState) {
+        setButtonsEnabled(!state.running)
+        if (state.running) {
+            progressBar.visibility = View.VISIBLE
+            progressBar.max = 100
+            if (state.percent >= 0) {
+                progressBar.isIndeterminate = false
+                progressBar.progress = state.percent
+                statusText.text = "${state.percent}%  ${state.detail}"
+            } else {
+                progressBar.isIndeterminate = true
+                statusText.text = "${state.title}  ${state.detail}"
+            }
+            return
+        }
+        if (state.finished && state.summary.isNotEmpty() && state.summary != lastSummary) {
+            lastSummary = state.summary
+            progressBar.isIndeterminate = false
+            if (state.ok) {
+                progressBar.visibility = View.VISIBLE
+                progressBar.progress = 100
+            } else {
+                progressBar.visibility = View.GONE
+            }
+            statusText.text = state.summary
+            log(state.summary)
+        }
+    }
+
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    /** 开始备份：先读取电脑端设备列表，让用户选择"新建"还是"认领已有" */
+    private fun startBackup() {
+        if (running) {
+            log("任务进行中，请稍候")
+            return
+        }
+        val url = saveUrl()
+        statusText.text = "读取电脑端设备列表..."
+        lifecycleScope.launch {
+            val devices = try {
+                withContext(Dispatchers.IO) { HubClient(url).devices() }
+            } catch (e: Exception) {
+                log("读取设备列表失败（按当前身份继续备份）：${e.message}")
+                emptyList()
+            }
+            statusText.text = "就绪"
+            if (devices.isEmpty()) {
+                runBackup(url)
+            } else {
+                runOnUiThread { askIdentityThenBackup(url, devices) }
+            }
+        }
+    }
+
+    /** 选择这台手机对应电脑端的哪台设备 */
+    private fun askIdentityThenBackup(url: String, devices: List<HubClient.DeviceSummary>) {
+        val boundId = prefs.getString("bound_device_id", null)
+        val autoDeviceName = prefs.getString("device_name", null)?.takeIf { it.isNotBlank() } ?: autoName()
+        val options = ArrayList<String>()
+        options.add("新建设备（自动识别：$autoDeviceName）")
+        for (device in devices) {
+            val mark = if (device.id == boundId) "  ← 当前使用" else ""
+            options.add("认领已有设备「${device.name}」（${device.mediaCount} 项）$mark")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("备份为哪台手机？")
+            .setItems(options.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    prefs.edit().remove("bound_device_id").apply()
+                    log("已选择：新建设备（自动识别）")
+                } else {
+                    val device = devices[which - 1]
+                    prefs.edit()
+                        .putString("bound_device_id", device.id)
+                        .putString("device_name", device.name)
+                        .apply()
+                    log("已选择：认领电脑端设备「${device.name}」")
+                }
+                updateIdentity()
+                runBackup(url)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun runBackup(url: String) {
+        setButtonsEnabled(false)
+        ensureNotificationPermission()
+        loadMascotFromHub(url)
+        // 交给前台服务跑：切走 App / 息屏都不会中断，进度同时显示在通知栏
+        SyncService.startBackup(this, url)
+    }
+
+    private fun setButtonsEnabled(enabled: Boolean) {
+        for (button in listOf(backupButton, scanButton, restoreButton)) {
+            button.isEnabled = enabled
+            button.alpha = if (enabled) 1f else 0.5f
+        }
+    }
+
+    /** 从电脑恢复（迁移回手机）：先选来源设备，再选恢复方式 */
+    private fun startRestore() {
+        if (running) {
+            log("任务进行中，请稍候")
+            return
+        }
+        val url = saveUrl()
+        statusText.text = "读取电脑端设备列表..."
+        lifecycleScope.launch {
+            val devices = try {
+                withContext(Dispatchers.IO) { HubClient(url).devices() }
+            } catch (e: Exception) {
+                log("读取设备列表失败：${e.message}")
+                emptyList()
+            }
+            statusText.text = "就绪"
+            if (devices.isEmpty()) {
+                log("电脑端没有可恢复的设备（先在手机上备份一次，或检查电脑端服务）")
+                return@launch
+            }
+            askRestoreDevice(url, devices)
+        }
+    }
+
+    private fun askRestoreDevice(url: String, devices: List<HubClient.DeviceSummary>) {
+        val boundId = prefs.getString("bound_device_id", null)
+        val options = devices.map { device ->
+            val mark = if (device.id == boundId) "  ← 当前使用" else ""
+            "「${device.name}」（${device.mediaCount} 项）$mark"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("从哪台设备恢复回手机？")
+            .setItems(options.toTypedArray()) { _, which ->
+                val device = devices[which]
+                log("恢复来源：${device.name}")
+                askRestoreMode(url, device)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun askRestoreMode(url: String, device: HubClient.DeviceSummary) {
+        val options = arrayOf(
+            "合并到同名文件夹（例如 DCIM/Camera 直接合并）",
+            "新建文件夹（自己起名字，导入成一个新相册）"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("怎么恢复「${device.name}」？")
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    runRestore(url, device.id, RestoreRunner.Mode.MERGE)
+                } else {
+                    promptRestoreFolderName(url, device)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 新建文件夹模式：文件夹名字可自定义，默认用设备名 */
+    private fun promptRestoreFolderName(url: String, device: HubClient.DeviceSummary) {
+        val input = EditText(this).apply {
+            setText(device.name)
+            selectAll()
+            hint = "新文件夹名字"
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("新文件夹叫什么名字？")
+            .setMessage("会在手机的 DCIM/ 下新建这个文件夹，导入成一个新相册")
+            .setView(input)
+            .setPositiveButton("开始恢复") { _, _ ->
+                val name = input.text.toString().trim().ifBlank { device.name }
+                runRestore(url, device.id, RestoreRunner.Mode.NEW_FOLDER, name)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun runRestore(
+        url: String,
+        deviceId: String,
+        mode: RestoreRunner.Mode,
+        folderName: String = ""
+    ) {
+        setButtonsEnabled(false)
+        ensureNotificationPermission()
+        // 同上：交给前台服务，切走 App / 息屏也能继续写回相册
+        SyncService.startRestore(this, url, deviceId, mode, folderName)
+    }
+
+    /** 自动化测试入口：自动选当前绑定的设备（或第一台）恢复 */
+    private fun autoRestore(url: String, mode: RestoreRunner.Mode, folderName: String) {
+        lifecycleScope.launch {
+            val devices = try {
+                withContext(Dispatchers.IO) { HubClient(url).devices() }
+            } catch (e: Exception) {
+                log("读取设备列表失败：${e.message}")
+                emptyList()
+            }
+            if (devices.isEmpty()) {
+                log("自动恢复：电脑端没有设备")
+                return@launch
+            }
+            val boundId = prefs.getString("bound_device_id", null)
+            val target = devices.firstOrNull { it.id == boundId } ?: devices.first()
+            val folder = folderName.ifBlank { target.name }
+            if (mode == RestoreRunner.Mode.MERGE) {
+                log("自动恢复：来源「${target.name}」，方式 合并")
+            } else {
+                log("自动恢复：来源「${target.name}」，方式 新建文件夹「$folder」")
+            }
+            runRestore(url, target.id, mode, folder)
+        }
+    }
+
+    private fun log(line: String) {
+        logText.append(line + "\n")
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}

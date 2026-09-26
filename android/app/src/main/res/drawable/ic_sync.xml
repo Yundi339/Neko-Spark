@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：向上箭头 + 底座（纯单色，系统会按通知样式着色） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2 L19,9 L15,9 L15,15 L9,15 L9,9 L5,9 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5,17 L19,17 L19,20 L5,20 Z" />
+</vector>

@@ -1,0 +1,48 @@
+appId: com.gallerymirror.desktop
+# ⚠️ 产品名 2026-09-25 由 GalleryMirror 改为 Neko_Spark（用户要求）。
+#   productName 决定：exe 文件名（Neko_Spark.exe）、安装包文件名、开始菜单/桌面快捷方式名字。
+#   appId 故意**保持不动**：它是"应用身份"，改了会让 Windows 把它当成另一个程序
+#   （旧的卸载项会残留成孤儿）。
+productName: Neko_Spark
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+asar: true
+win:
+  # 图标 = 侧栏那个猫猫头（assets/stickers/logo.png）；
+  # build/icon.ico 由 `.cache/make-icon.mjs` 生成（7 个尺寸：16~256）。
+  # 不配它的话 Windows 会显示 Electron 默认图标（深色圆 + 轨道符号，用户嫌丑）。
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  # ⚠️ perMachine: true = "为使用这台电脑的任何人安装"，也就是**所有用户**安装：
+  #   ① 安装时不再出现"为哪位用户安装"那个选择页面（跟普通软件一样，用户要的就是这个）
+  #      —— 之前是 false + allowElevation，等于"两种模式都支持"，覆盖安装时必弹那个页面，
+  #      连 `/S` 都拦不住，用户以为在让他手动安装。
+  #   ② 代价是装的时候要管理员权限：双击安装包会弹一次 UAC（正常软件都这样），
+  #      装到 D:\GalleryMirror（build/installer.nsh 里钉死的默认目录，铁律 2：不放 C 盘）。
+  #   ③ 所以**日常"改完自己装上"不要走安装器**（UAC 会卡住自动化），走
+  #      `node scripts/deploy-installed.mjs`：它直接把 release/win-unpacked 里的成品复制到
+  #      D:\GalleryMirror（关程序 → 复制 → 重启 → 验证），全程没有任何窗口、不需要点任何东西。
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Neko_Spark
+  include: build/installer.nsh
+  artifactName: ${productName}-${version}-安装版.${ext}
+portable:
+  artifactName: ${productName}-${version}-便携版.${ext}

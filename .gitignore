@@ -1,0 +1,49 @@
+node_modules/
+out/
+dist/
+release/
+.cache/
+.data/
+.screenshots/
+*.log
+*.local
+
+# 程序本体（约 400MB，本地可重建）
+# ⚠️ 必须写成 /app/ 锚定根目录：写成 app/ 会连带吃掉 android/app/
+#    （安卓源码全在里面，40 个文件会被静默排除，且 git 不报任何错）
+/app/
+
+# 相册库数据目录（约 36GB）：整体排除，只放行要随源码一起发布的素材
+# ⚠️ 必须写成 /GalleryMirrorData/* —— 不能写成 /GalleryMirrorData/。
+#    gitignore 有硬性限制："父目录被排除时，子路径无法用 ! 重新包含"。
+#    写成带 /* 的只排除"目录内的条目"，父目录本身没被排除，! 才生效。
+/GalleryMirrorData/*
+!/GalleryMirrorData/stickers/
+!/GalleryMirrorData/background-*.webp
+!/GalleryMirrorData/nekoha-originals/
+
+# 本地私有内容（只在自己电脑上，绝不进公开仓库）
+# .archive/ 存的是开发过程存档（含本机路径、局域网 IP、私人对话记录）
+# CLAUDE.md 是给接任 AI 的交接文件，含同样的本机信息与用户偏好
+.archive/
+CLAUDE.md
+
+# 源码快照目录（仓库就建在项目根，此处不再需要；保留在本地但不提交）
+源/
+
+# 安卓端构建产物与机器相关配置
+# ⚠️ 只能按路径排除：根目录的 build/ 里有 installer.nsh 和图标，是打包必需的源码，不能一起忽略
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

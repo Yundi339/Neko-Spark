@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="gm_bg">#F2F8FF</color>
+    <color name="gm_bg2">#E7F3FF</color>
+    <color name="gm_card">#FFFFFF</color>
+    <color name="gm_text">#2D426B</color>
+    <color name="gm_text_dim">#7F94B6</color>
+    <color name="gm_accent">#4A9FFF</color>
+    <color name="gm_accent_light">#8FD0FF</color>
+    <color name="gm_border">#D8E8FB</color>
+    <color name="gm_pink">#FF9EC4</color>
+    <color name="gm_ok">#35C58E</color>
+    <!-- 自适应图标（mipmap-anydpi-v26/ic_launcher.xml）的背景色。
+         ⚠️ 要和 scripts/make-icon.mjs 里的 BG 保持一致（生成前景图时用的是同一个色）。 -->
+    <color name="ic_launcher_background">#F2F8FF</color>
+</resources>
