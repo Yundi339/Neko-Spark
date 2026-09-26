@@ -3,13 +3,8 @@
 安卓端是一个 Kotlin 应用，负责把手机相册**备份到电脑**，以及把电脑上的备份**恢复回手机**。
 它与电脑端之间只通过 **HTTP 协议 v1** 通信（不共享代码、不共享构建系统）。
 
-> ⚠️ **这是两个必须配合使用的程序中的一个，另一半在 [`../desktop/`](../desktop/)。**
-> 只有安卓端，App 连不上任何电脑、什么都做不了；只有电脑端，手机照片无法自动传进来。
-> **电脑端才是 Hub**，手机要连的是它起的本地服务，所以必须先跑起电脑端。
->
-> 协议定义见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)；
-> 电脑端的架构说明见 [`../desktop/ARCHITECTURE.md`](../desktop/ARCHITECTURE.md)；
-> 安卓端的构建与运行见 [`README.md`](README.md)。
+> 电脑端在 [`../desktop/`](../desktop/)；协议见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)；
+> 构建与运行见 [`README.md`](README.md)。
 
 ---
 

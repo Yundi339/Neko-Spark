@@ -5,27 +5,8 @@
 本目录是**电脑端**：Electron 应用，同时充当整个系统的**本地服务 Hub**
 （HTTP `8787` + UDP 发现 `8788`）——手机端要连的就是它。
 
----
-
-# 📍 另一半在这里：[`../android/`](../android/)
-
-> ## ⚠️ 这是**必要的一部分**，不是可选项
->
-> Neko_Spark 由**两个必须配合使用的程序**组成，**本目录只是其中一半**。
-> 另一半（手机上的 App）在 **[`../android/`](../android/)**。
-
-| | 位置 | 作用 |
-|---|---|---|
-| **电脑端** ← 你在这里 | [`desktop/`](.) | 仓库、浏览界面、导出、本地 Hub |
-| **安卓端** | [**`../android/`**](../android/) | 手机上的 App：扫描相册、备份上传、从电脑恢复回相册 |
-
-**为什么两边都必要：**
-
-- **只有电脑端** → 手机相册没法自动传进来（只能用「设备 → 导入文件夹」手动导入）
-- **只有安卓端** → App 连不上任何电脑，扫描出来也传不出去，什么都做不了
-
-两端的接口契约（改协议时两边都要动）：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)
-两边共用的角色素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
+> 📱 **手机端不在这个目录** —— 安卓 App 在 [`../android/`](../android/)。
+> 两端接口契约：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)　共用素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
 
 ---
 
@@ -37,10 +18,7 @@
 | Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
 | **Android** | `Neko_Spark-x.y.z.apk` | **手机版** —— 另一半，见下方提示 |
 
-全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页。
-
-> 📄 **手机软件不在这里** —— 它来自另一个目录 `android/`，
-> 详见 [`手机软件来自另一个仓库.md`](手机软件来自另一个仓库.md)。
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页（源码也分两份放在那里）。
 
 ---
 

@@ -5,30 +5,9 @@
 本目录是**安卓端**：一个 Kotlin App，扫描系统相册、算指纹、分块上传、后台传输；
 它**不自己存储任何东西**，所有照片都交给电脑端保管。
 
----
-
-# 📍 另一半在这里：[`../desktop/`](../desktop/)
-
-> ## ⚠️ 这是**必要的一部分**，不是可选项
->
-> Neko_Spark 由**两个必须配合使用的程序**组成，**本目录只是其中一半**。
-> 另一半（电脑上的程序）在 **[`../desktop/`](../desktop/)**。
-
-| | 位置 | 作用 |
-|---|---|---|
-| **安卓端** ← 你在这里 | [`android/`](.) | 手机上的 App：扫描相册、备份上传、从电脑恢复回相册 |
-| **电脑端** | [**`../desktop/`**](../desktop/) | 电脑上的程序：仓库、浏览界面、导出、**本地服务 Hub** |
-
-**为什么两边都必要：**
-
-- **只有安卓端** → 这个 App 连不上任何电脑，扫描出来也传不出去，**什么都做不了**
-- **只有电脑端** → 手机相册没法自动传进来（只能用「设备 → 导入文件夹」手动导入）
-
-> 🔑 **电脑端是 Hub**：手机要连的是电脑端起的本地服务（HTTP `8787`），
-> 所以**必须先把电脑端跑起来**，再在手机 App 里填电脑的局域网地址。
-
-两端的接口契约（改协议时两边都要动）：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)
-两边共用的角色素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
+> 💻 **电脑端不在这个目录** —— Windows 程序在 [`../desktop/`](../desktop/)，
+> 它同时是本地服务 Hub（HTTP `8787`），手机连的就是它，所以**得先把它跑起来**。
+> 两端接口契约：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)　共用素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
 
 ---
 
@@ -40,10 +19,7 @@
 | Windows | `Neko_Spark-x.y.z-win-setup-x64.exe` | **电脑版** —— 另一半，必须先装它手机才有东西可连 |
 | Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
 
-全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页。
-
-> 📄 **电脑软件不在这里** —— 它来自另一个目录 `desktop/`，
-> 详见 [`电脑软件来自另一个仓库.md`](电脑软件来自另一个仓库.md)。
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页（源码也分两份放在那里）。
 
 ---
 
