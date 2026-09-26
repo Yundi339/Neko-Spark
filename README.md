@@ -10,9 +10,13 @@
 
 | 目录 | 内容 | 说明文档 |
 |---|---|---|
-| [`desktop/`](desktop/) | 电脑端（Electron + TypeScript + React） | [**电脑端架构**](desktop/ARCHITECTURE.md) |
-| [`android/`](android/) | 安卓端（Kotlin + Gradle） | [**安卓端架构**](android/ARCHITECTURE.md) |
+| [`desktop/`](desktop/) | 电脑端（Electron + TypeScript + React），同时是本地 Hub | [README](desktop/README.md) · [**架构**](desktop/ARCHITECTURE.md) |
+| [`android/`](android/) | 安卓端（Kotlin + Gradle） | [README](android/README.md) · [**架构**](android/ARCHITECTURE.md) |
 | [`docs/`](docs/) | 两端之间的接口契约 | [协议 v1](docs/protocol-v1.md) |
+
+> ⚠️ **两个程序必须配合使用，缺一个都不是完整的 Neko_Spark。**
+> 只有电脑端 → 手机照片无法自动传进来；只有安卓端 → App 连不上任何电脑、什么都做不了。
+> 每棵树的 README 开头都写明了另一半的位置。
 
 想参与开发请看 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 

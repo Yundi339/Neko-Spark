@@ -3,8 +3,12 @@
 电脑端是一个 **Electron 应用**，同时充当整个系统的 **Hub**：对外提供 HTTP 服务与协议 v1 接口，
 对内管理内容寻址仓库、SQLite 元数据库与缩略图缓存；界面上是一个「像手机相册一样」的浏览器。
 
-> 协议定义见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)。
-> 安卓端的说明见 [`../android/ARCHITECTURE.md`](../android/ARCHITECTURE.md)。
+> ⚠️ **这是两个必须配合使用的程序中的一个，另一半在 [`../android/`](../android/)。**
+> 只有电脑端，手机照片无法自动传进来；只有安卓端，App 连不上任何电脑。
+>
+> 协议定义见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)；
+> 安卓端的架构说明见 [`../android/ARCHITECTURE.md`](../android/ARCHITECTURE.md)；
+> 电脑端的构建与运行见 [`README.md`](README.md)。
 
 ---
 
