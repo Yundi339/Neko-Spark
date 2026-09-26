@@ -32,6 +32,21 @@
 
 ---
 
+## 下载
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| Android | `Neko_Spark-x.y.z.apk` | **手机版** ← 本目录对应的程序 |
+| Windows | `Neko_Spark-x.y.z-win-setup-x64.exe` | **电脑版** —— 另一半，必须先装它手机才有东西可连 |
+| Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
+
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页。
+
+> 📄 **电脑软件不在这里** —— 它来自另一个目录 `desktop/`，
+> 详见 [`电脑软件来自另一个仓库.md`](电脑软件来自另一个仓库.md)。
+
+---
+
 ## 快速开始
 
 **环境**：JDK 17 + Gradle 8.9 + Android SDK（`platforms;android-34` / `build-tools;34.0.0`）。

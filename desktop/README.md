@@ -29,6 +29,21 @@
 
 ---
 
+## 下载
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| Windows | `Neko_Spark-x.y.z-win-setup-x64.exe` | **电脑版** ← 本目录对应的程序 |
+| Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
+| **Android** | `Neko_Spark-x.y.z.apk` | **手机版** —— 另一半，见下方提示 |
+
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页。
+
+> 📄 **手机软件不在这里** —— 它来自另一个目录 `android/`，
+> 详见 [`手机软件来自另一个仓库.md`](手机软件来自另一个仓库.md)。
+
+---
+
 ## 快速开始
 
 **环境**：Node.js >= 22。不需要 Android SDK。
