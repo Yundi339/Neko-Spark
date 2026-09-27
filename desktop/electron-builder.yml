@@ -12,6 +12,27 @@ files:
   - package.json
   - '!**/*.map'
 asar: true
+# ⚠️ 素材必须随安装包一起发布（2026-09-27 补）。
+#   files 只打 out/**，而空状态大插画和贴图是**运行时从数据目录读**的
+#   （GET /api/v1/background/:n、GET /api/v1/stickers），不在 out/ 里 ——
+#   所以发行版装到新机器上，数据目录是空的，插画和贴图就全没了
+#   （开发机上看得到，只是因为开发机的数据目录里恰好有这些图）。
+#   打包进 resources/assets/，启动时由 seedBundledAssets() 补进数据目录。
+#   from 相对 desktop/（electron-builder 的工作目录）。
+extraResources:
+  - from: ../GalleryMirrorData/background-1.webp
+    to: assets/background-1.webp
+  - from: ../GalleryMirrorData/background-2.webp
+    to: assets/background-2.webp
+  - from: ../GalleryMirrorData/background-3.webp
+    to: assets/background-3.webp
+  - from: ../GalleryMirrorData/background-4.webp
+    to: assets/background-4.webp
+  - from: ../GalleryMirrorData/stickers
+    to: assets/stickers
+  # 素材原图（prepare-stickers.mjs 的输入，界面不直接读）；一起带上便于二次加工
+  - from: ../GalleryMirrorData/nekoha-originals
+    to: assets/nekoha-originals
 win:
   # 图标 = 侧栏那个猫猫头（assets/stickers/logo.png）；
   # build/icon.ico 由 `.cache/make-icon.mjs` 生成（7 个尺寸：16~256）。

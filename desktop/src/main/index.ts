@@ -28,7 +28,7 @@ import {
   type TaskProgress
 } from '@shared/types'
 import { applyRuntimePaths, resolveDataDir, writeConfiguredDataDir } from './hub/config'
-import { ensureStorage, videoThumbPath, type StoragePaths } from './hub/storage'
+import { ensureStorage, seedBundledAssets, videoThumbPath, type StoragePaths } from './hub/storage'
 import { Database } from './hub/db'
 import { startHub, type HubHandle } from './hub'
 import { importFolder } from './hub/importer'
@@ -85,9 +85,23 @@ function buildStatus(): AppStatus {
   }
 }
 
+/**
+ * 随安装包发布的素材目录（空状态大插画、贴图、素材原图）。
+ * 打包后：<安装目录>/resources/assets/（electron-builder.yml 的 extraResources）
+ * 开发时：仓库根的 GalleryMirrorData/（与开发数据目录 desktop/.data 不是同一个）
+ */
+function bundledAssetsDir(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'assets')
+  return join(process.cwd(), '..', 'GalleryMirrorData')
+}
+
 async function bootstrap(): Promise<void> {
   try {
     paths = ensureStorage(dataDir)
+    // 必须在建库/起 hub 之前播种：否则首屏拉 /background/:n 会 404，
+    // 前端把 null 缓存下来，这一轮就看不到插画了（要重启才补上）。
+    const seeded = seedBundledAssets(paths, bundledAssetsDir())
+    if (seeded > 0) console.log(`[assets] 已补齐内置素材 ${seeded} 个 → ${paths.dataDir}`)
     db = new Database(paths.dbPath)
     hub = await startHub({
       db,
