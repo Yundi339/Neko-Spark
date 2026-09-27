@@ -39,6 +39,9 @@ jobs:
       - name: Install desktop dependencies
         run: npm.cmd ci --no-audit --fund=false
 
+      - name: Install Electron runtime
+        run: node node_modules/electron/install.js
+
       - name: Run desktop gate and end-to-end test
         run: npm.cmd test
 
@@ -83,6 +86,11 @@ jobs:
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace --console=plain
 
+      - name: Verify APK signature
+        run: >-
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload Android release artifact
         if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
         uses: actions/upload-artifact@v4
@@ -113,7 +121,9 @@ jobs:
             echo 'Tracked private or machine-local file detected.' >&2
             exit 1
           fi
-          private_marker='BEGIN '\"(RSA|EC|OPENSSH|DSA|PRIVATE)\"' KEY'
+          private_marker='BEGIN ('
+          private_marker+='RSA|EC|OPENSSH|DSA|PRIVATE'
+          private_marker+=') KEY'
           credential_pattern="${private_marker}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}"
           if git grep -n -I -E "$credential_pattern" -- . ':!*.lock'; then
             echo 'Possible credential material detected in tracked source.' >&2
