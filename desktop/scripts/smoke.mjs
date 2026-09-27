@@ -551,18 +551,26 @@ try {
         `(() => { const c = document.querySelector('.album-card'); return c ? Math.round(c.getBoundingClientRect().width) : 0 })()`
       )
     )
-  const wheelZoomAlbums = async (deltaY) => {
-    await evaluate(`(() => {
-      const el = document.querySelector('.grid-wrap');
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: ${deltaY}, ctrlKey: true, bubbles: true, cancelable: true }));
-      return true;
-    })()`)
-    await sleep(250)
+  await cdp('Page.bringToFront').catch(() => undefined)
+  await sleep(400)
+  const wheelZoomAlbums = async (deltaY, changed) => {
+    let width = await albumCardWidth()
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await evaluate(`(() => {
+        const el = document.querySelector('.grid-wrap');
+        if (!el) return false;
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: ${deltaY}, ctrlKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`)
+      await sleep(300)
+      width = await albumCardWidth()
+      if (changed(width)) return width
+    }
+    return width
   }
-  await wheelZoomAlbums(120) // 缩小一档
-  const shrunkWidth = await albumCardWidth()
-  await wheelZoomAlbums(-120) // 放大一档
-  const grownWidth = await albumCardWidth()
+  const originalAlbumWidth = await albumCardWidth()
+  const shrunkWidth = await wheelZoomAlbums(120, (width) => width < originalAlbumWidth) // 缩小一档
+  const grownWidth = await wheelZoomAlbums(-120, (width) => width > shrunkWidth) // 放大一档
   check(
     '相册视图里 Ctrl+滚轮能放大/缩小卡片（含"先空后有"的时序）',
     shrunkWidth > 0 && grownWidth > shrunkWidth,
