@@ -177,7 +177,11 @@ function isSafeRelativePath(value: unknown): value is string {
   if (!isSafeText(value)) return false
   if (value.length === 0) return true
   if (value.includes('\\') || value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
-  return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..')
+  const parts = value.split('/')
+  // MediaStore 的 RELATIVE_PATH 和协议中的相册目录通常以一个 `/` 结尾；
+  // 只去掉这个目录标记，仍拒绝中间空段、绝对路径和 `.`/`..`。
+  if (parts.at(-1) === '') parts.pop()
+  return parts.length > 0 && parts.every((part) => part.length > 0 && part !== '.' && part !== '..')
 }
 
 function isSafeFileName(value: unknown): value is string {

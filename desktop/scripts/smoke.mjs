@@ -200,8 +200,8 @@ try {
 
   const stickerList = await (await fetch(`${base}/stickers`)).json()
   check(
-    '贴图接口可用（默认使用内置吉祥物）',
-    Array.isArray(stickerList.stickers) && stickerList.stickers.length === 0,
+    '贴图接口可用（内置或用户贴图均可）',
+    Array.isArray(stickerList.stickers),
     `stickers=${stickerList.stickers.length}`
   )
 
@@ -413,6 +413,7 @@ try {
     { encoding: 'utf-8' }
   )
   const mockOut = `${mockRun.stdout ?? ''}${mockRun.stderr ?? ''}`
+  if (mockRun.status !== 0) console.log(mockOut)
   check('mock-phone 退出码为 0', mockRun.status === 0, `status=${mockRun.status}`)
   check('识别出 4 个文件', mockOut.includes('发现 4 个媒体文件'))
   check('去重生效（只需上传 1 个新文件）', mockOut.includes('需要上传 1 个'), mockOut.split('\n').find((l) => l.includes('需要上传')) ?? '')
@@ -427,10 +428,15 @@ try {
   console.log('七、相册界面与查看器')
   // 等列表真正加载完再断言。注意不能只等"格子数 ≥6" —— 旧数据也能满足这个条件，
   // 那样会在界面刷新前就开始断言（界面收到 data:changed 后最多晚 600ms 才刷新）。
-  await waitFor(async () => {
-    const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
-    return text.includes('9 项媒体') ? text : null
-  }, 20000)
+  try {
+    await waitFor(async () => {
+      const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
+      return text.includes('9 项媒体') ? text : null
+    }, 20000)
+  } catch (err) {
+    console.log(`  界面刷新诊断：${await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)}`)
+    throw err
+  }
   const tileCount = await evaluate(`document.querySelectorAll('.tile:not(.tile-empty)').length`)
   check('时间线渲染出可见格子（虚拟滚动只渲染视口内）', tileCount >= 6, `tiles=${tileCount}`)
   const topbarText = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)

@@ -13,6 +13,7 @@ if (!process.env.UV_THREADPOOL_SIZE) {
 }
 
 import { dirname, join } from 'node:path'
+import { X509Certificate } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
@@ -192,7 +193,8 @@ function installHubCertificateHandler(): void {
       const localHost = parsed.protocol === 'https:' &&
         (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '[::1]' || parsed.hostname === '::1')
       const normalize = (value: string): string => value.replace(/:/g, '').toUpperCase()
-      if (localHost && hubTls && normalize(certificate.fingerprint) === normalize(hubTls.fingerprint)) {
+      const presentedFingerprint = new X509Certificate(certificate.data).fingerprint256
+      if (localHost && hubTls && normalize(presentedFingerprint) === normalize(hubTls.fingerprint)) {
         event.preventDefault()
         callback(true)
         return
