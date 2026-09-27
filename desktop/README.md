@@ -18,7 +18,7 @@
 | Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
 | **Android** | `Neko_Spark-x.y.z.apk` | **手机版** —— 另一半，见下方提示 |
 
-全部在 **[Releases](https://github.com/Yundi339/Neko-Spark/releases)** 页（源码也分两份放在那里）。
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页（源码也分两份放在那里）。
 
 ---
 

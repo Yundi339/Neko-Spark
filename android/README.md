@@ -19,7 +19,7 @@
 | Windows | `Neko_Spark-x.y.z-win-setup-x64.exe` | **电脑版** —— 另一半，必须先装它手机才有东西可连 |
 | Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
 
-全部在 **[Releases](https://github.com/Yundi339/Neko-Spark/releases)** 页（源码也分两份放在那里）。
+全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页（源码也分两份放在那里）。
 
 ---
 
