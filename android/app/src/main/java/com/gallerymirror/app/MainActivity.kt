@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.view.Gravity
 import android.view.View
@@ -32,6 +33,8 @@ class MainActivity : ComponentActivity() {
 
     private val prefs by lazy { getSharedPreferences("gallery_mirror", MODE_PRIVATE) }
     private lateinit var urlInput: EditText
+    private lateinit var tokenInput: EditText
+    private lateinit var fingerprintInput: EditText
     private lateinit var identityText: TextView
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
@@ -121,7 +124,7 @@ class MainActivity : ComponentActivity() {
         })
         urlInput = EditText(this).apply {
             setText(prefs.getString("hub_url", defaultHubUrl()))
-            hint = "http://192.168.x.x:8787"
+            hint = "https://192.168.x.x:8787"
             textSize = 15f
             setTextColor(colorText)
             setHintTextColor(colorDim)
@@ -149,6 +152,43 @@ class MainActivity : ComponentActivity() {
                 topMargin = dp(6)
             }
         )
+
+        card.addView(TextView(this).apply {
+            text = "局域网访问密钥"
+            textSize = 12f
+            setTextColor(colorDim)
+            setPadding(0, dp(12), 0, 0)
+        })
+        tokenInput = EditText(this).apply {
+            setText(prefs.getString("hub_token", ""))
+            hint = "从电脑端设置页复制（USB 回环可留空）"
+            textSize = 15f
+            setTextColor(colorText)
+            setHintTextColor(colorDim)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine()
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_input)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        card.addView(tokenInput, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+
+        card.addView(TextView(this).apply {
+            text = "HTTPS 证书 SHA-256 指纹"
+            textSize = 12f
+            setTextColor(colorDim)
+            setPadding(0, dp(12), 0, 0)
+        })
+        fingerprintInput = EditText(this).apply {
+            setText(prefs.getString("hub_fingerprint", ""))
+            hint = "从电脑端设置页复制（可带冒号）"
+            textSize = 15f
+            setTextColor(colorText)
+            setHintTextColor(colorDim)
+            setSingleLine()
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_input)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        card.addView(fingerprintInput, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
 
         card.addView(TextView(this).apply {
             text = "设备身份（我是哪台手机）"
@@ -238,17 +278,19 @@ class MainActivity : ComponentActivity() {
         backupButton.setOnClickListener { startBackup() }
         restoreButton.setOnClickListener { ensurePermissionThen { startRestore() } }
 
-        log("提示：USB 连接时先在电脑执行 adb reverse tcp:8787 tcp:8787，地址填 http://127.0.0.1:8787")
+        log("提示：USB 连接时先在电脑执行 adb reverse tcp:8787 tcp:8787，地址填 https://127.0.0.1:8787，并填写证书指纹")
         log("手机 → 电脑：点「开始备份」；电脑 → 手机：点「从电脑恢复」")
 
-        // 自动化测试入口：am start ... --ez autorun true [--es hub http://xxx:8787]
+        // 自动化测试入口：am start ... --ez autorun true [--es hub https://xxx:8787]
         intent?.getStringExtra("hub")?.let { urlInput.setText(it) }
+        intent?.getStringExtra("token")?.let { tokenInput.setText(it) }
+        intent?.getStringExtra("fingerprint")?.let { fingerprintInput.setText(it) }
         updateIdentity()
         if (intent?.getBooleanExtra("searchhubs", false) == true) {
             logText.postDelayed({ searchHubs() }, 500)
         }
         if (intent?.getBooleanExtra("autorun", false) == true) {
-            logText.postDelayed({ runBackup(saveUrl()) }, 400)
+            logText.postDelayed({ runBackup(saveUrl(), saveToken(), saveFingerprint()) }, 400)
         }
         // 自动化测试入口：am start ... --ez restore true [--es restoremode merge|new] [--es restorefolder 名字]
         if (intent?.getBooleanExtra("restore", false) == true) {
@@ -258,7 +300,7 @@ class MainActivity : ComponentActivity() {
                 RestoreRunner.Mode.MERGE
             }
             val folder = intent.getStringExtra("restorefolder") ?: ""
-            logText.postDelayed({ ensurePermissionThen { autoRestore(saveUrl(), mode, folder) } }, 500)
+            logText.postDelayed({ ensurePermissionThen { autoRestore(saveUrl(), saveToken(), saveFingerprint(), mode, folder) } }, 500)
         }
     }
 
@@ -272,14 +314,16 @@ class MainActivity : ComponentActivity() {
                 log("没有搜索到电脑。请确认：电脑端程序正在运行、手机与电脑连同一个 WiFi；也可以手动填地址。")
                 return@launch
             }
-            val labels = found.map { "${it.name}（${it.host}:${it.port}）" }.toTypedArray()
+            val labels = found.map { "${it.name}（${it.host}:${it.port}）\n指纹：${it.fingerprint.take(16)}…" }.toTypedArray()
             runOnUiThread {
                 AlertDialog.Builder(this@MainActivity)
                     .setTitle("选择要连接的电脑（找到 ${found.size} 台）")
                     .setItems(labels) { _, which ->
                         val target = found[which]
                         urlInput.setText(target.url)
+                        fingerprintInput.setText(target.fingerprint)
                         saveUrl()
+                        saveFingerprint()
                         log("已选择电脑：${target.name}  ${target.url}")
                         testConnection()
                     }
@@ -301,9 +345,11 @@ class MainActivity : ComponentActivity() {
     /** 选择设备身份：改名 / 新建 / 认领电脑端已有设备 */
     private fun pickDeviceIdentity() {
         val url = saveUrl()
+        val token = saveToken()
+        val fingerprint = saveFingerprint()
         lifecycleScope.launch {
             val devices = try {
-                withContext(Dispatchers.IO) { HubClient(url).devices() }
+                withContext(Dispatchers.IO) { HubClient(url, token, fingerprint).devices() }
             } catch (e: Exception) {
                 log("获取电脑端设备列表失败：${e.message}")
                 emptyList()
@@ -377,15 +423,14 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 模拟器里 10.0.2.2 就是宿主机，可以直接用。
-     * 真机没有可猜的默认值（每家的网段都不一样），给一个**示例地址**占位，
-     * 供用户改成自己电脑的局域网地址 —— 界面上那个输入框的 hint 也是这么写的。
+     * 真机没有可猜的默认值（每家的网段都不一样），留空让用户填写或使用搜索结果。
      */
     private fun defaultHubUrl(): String {
         val isEmulator = Build.FINGERPRINT.contains("generic") ||
             Build.FINGERPRINT.contains("emulator") ||
             Build.MODEL.contains("sdk", ignoreCase = true) ||
             Build.PRODUCT.contains("sdk", ignoreCase = true)
-        return if (isEmulator) "http://10.0.2.2:8787" else "http://192.168.1.5:8787"
+        return if (isEmulator) "https://10.0.2.2:8787" else ""
     }
 
     private fun saveUrl(): String {
@@ -394,15 +439,29 @@ class MainActivity : ComponentActivity() {
         return url
     }
 
+    private fun saveToken(): String {
+        val token = tokenInput.text.toString().trim()
+        prefs.edit().putString("hub_token", token).apply()
+        return token
+    }
+
+    private fun saveFingerprint(): String {
+        val fingerprint = fingerprintInput.text.toString().trim()
+        prefs.edit().putString("hub_fingerprint", fingerprint).apply()
+        return fingerprint
+    }
+
     private fun testConnection() {
         val url = saveUrl()
+        val token = saveToken()
+        val fingerprint = saveFingerprint()
         statusText.text = "测试连接中..."
         lifecycleScope.launch {
             try {
-                val result = withContext(Dispatchers.IO) { HubClient(url).health() }
+                val result = withContext(Dispatchers.IO) { HubClient(url, token, fingerprint).health() }
                 statusText.text = "连接成功"
                 log("连接成功：$result")
-                loadMascotFromHub(url)
+                loadMascotFromHub(url, token, fingerprint)
             } catch (e: Exception) {
                 statusText.text = "连接失败"
                 log("连接失败：${e.message}")
@@ -411,11 +470,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 电脑端设置了本地贴图时，手机端显示同一套图 */
-    private fun loadMascotFromHub(url: String) {
+    private fun loadMascotFromHub(url: String, token: String, fingerprint: String) {
         lifecycleScope.launch {
             try {
                 val bitmap = withContext(Dispatchers.IO) {
-                    val client = HubClient(url)
+                    val client = HubClient(url, token, fingerprint)
                     val stickers = client.stickerUrls()
                     if (stickers.isEmpty()) null else client.fetchBitmap(stickers.first())
                 }
@@ -537,25 +596,27 @@ class MainActivity : ComponentActivity() {
             return
         }
         val url = saveUrl()
+        val token = saveToken()
+        val fingerprint = saveFingerprint()
         statusText.text = "读取电脑端设备列表..."
         lifecycleScope.launch {
             val devices = try {
-                withContext(Dispatchers.IO) { HubClient(url).devices() }
+                withContext(Dispatchers.IO) { HubClient(url, token, fingerprint).devices() }
             } catch (e: Exception) {
                 log("读取设备列表失败（按当前身份继续备份）：${e.message}")
                 emptyList()
             }
             statusText.text = "就绪"
             if (devices.isEmpty()) {
-                runBackup(url)
+                runBackup(url, token, fingerprint)
             } else {
-                runOnUiThread { askIdentityThenBackup(url, devices) }
+                runOnUiThread { askIdentityThenBackup(url, token, fingerprint, devices) }
             }
         }
     }
 
     /** 选择这台手机对应电脑端的哪台设备 */
-    private fun askIdentityThenBackup(url: String, devices: List<HubClient.DeviceSummary>) {
+    private fun askIdentityThenBackup(url: String, token: String, fingerprint: String, devices: List<HubClient.DeviceSummary>) {
         val boundId = prefs.getString("bound_device_id", null)
         val autoDeviceName = prefs.getString("device_name", null)?.takeIf { it.isNotBlank() } ?: autoName()
         val options = ArrayList<String>()
@@ -579,18 +640,18 @@ class MainActivity : ComponentActivity() {
                     log("已选择：认领电脑端设备「${device.name}」")
                 }
                 updateIdentity()
-                runBackup(url)
+                runBackup(url, token, fingerprint)
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun runBackup(url: String) {
+    private fun runBackup(url: String, token: String, fingerprint: String) {
         setButtonsEnabled(false)
         ensureNotificationPermission()
-        loadMascotFromHub(url)
+        loadMascotFromHub(url, token, fingerprint)
         // 交给前台服务跑：切走 App / 息屏都不会中断，进度同时显示在通知栏
-        SyncService.startBackup(this, url)
+        SyncService.startBackup(this, url, token, fingerprint)
     }
 
     private fun setButtonsEnabled(enabled: Boolean) {
@@ -607,10 +668,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         val url = saveUrl()
+        val token = saveToken()
+        val fingerprint = saveFingerprint()
         statusText.text = "读取电脑端设备列表..."
         lifecycleScope.launch {
             val devices = try {
-                withContext(Dispatchers.IO) { HubClient(url).devices() }
+                withContext(Dispatchers.IO) { HubClient(url, token, fingerprint).devices() }
             } catch (e: Exception) {
                 log("读取设备列表失败：${e.message}")
                 emptyList()
@@ -620,11 +683,11 @@ class MainActivity : ComponentActivity() {
                 log("电脑端没有可恢复的设备（先在手机上备份一次，或检查电脑端服务）")
                 return@launch
             }
-            askRestoreDevice(url, devices)
+            askRestoreDevice(url, token, fingerprint, devices)
         }
     }
 
-    private fun askRestoreDevice(url: String, devices: List<HubClient.DeviceSummary>) {
+    private fun askRestoreDevice(url: String, token: String, fingerprint: String, devices: List<HubClient.DeviceSummary>) {
         val boundId = prefs.getString("bound_device_id", null)
         val options = devices.map { device ->
             val mark = if (device.id == boundId) "  ← 当前使用" else ""
@@ -635,13 +698,13 @@ class MainActivity : ComponentActivity() {
             .setItems(options.toTypedArray()) { _, which ->
                 val device = devices[which]
                 log("恢复来源：${device.name}")
-                askRestoreMode(url, device)
+                askRestoreMode(url, token, fingerprint, device)
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
-    private fun askRestoreMode(url: String, device: HubClient.DeviceSummary) {
+    private fun askRestoreMode(url: String, token: String, fingerprint: String, device: HubClient.DeviceSummary) {
         val options = arrayOf(
             "合并到同名文件夹（例如 DCIM/Camera 直接合并）",
             "新建文件夹（自己起名字，导入成一个新相册）"
@@ -650,9 +713,9 @@ class MainActivity : ComponentActivity() {
             .setTitle("怎么恢复「${device.name}」？")
             .setItems(options) { _, which ->
                 if (which == 0) {
-                    runRestore(url, device.id, RestoreRunner.Mode.MERGE)
+                    runRestore(url, token, fingerprint, device.id, RestoreRunner.Mode.MERGE)
                 } else {
-                    promptRestoreFolderName(url, device)
+                    promptRestoreFolderName(url, token, fingerprint, device)
                 }
             }
             .setNegativeButton("取消", null)
@@ -660,7 +723,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 新建文件夹模式：文件夹名字可自定义，默认用设备名 */
-    private fun promptRestoreFolderName(url: String, device: HubClient.DeviceSummary) {
+    private fun promptRestoreFolderName(url: String, token: String, fingerprint: String, device: HubClient.DeviceSummary) {
         val input = EditText(this).apply {
             setText(device.name)
             selectAll()
@@ -673,7 +736,7 @@ class MainActivity : ComponentActivity() {
             .setView(input)
             .setPositiveButton("开始恢复") { _, _ ->
                 val name = input.text.toString().trim().ifBlank { device.name }
-                runRestore(url, device.id, RestoreRunner.Mode.NEW_FOLDER, name)
+                runRestore(url, token, fingerprint, device.id, RestoreRunner.Mode.NEW_FOLDER, name)
             }
             .setNegativeButton("取消", null)
             .show()
@@ -681,6 +744,8 @@ class MainActivity : ComponentActivity() {
 
     private fun runRestore(
         url: String,
+        token: String,
+        fingerprint: String,
         deviceId: String,
         mode: RestoreRunner.Mode,
         folderName: String = ""
@@ -688,14 +753,14 @@ class MainActivity : ComponentActivity() {
         setButtonsEnabled(false)
         ensureNotificationPermission()
         // 同上：交给前台服务，切走 App / 息屏也能继续写回相册
-        SyncService.startRestore(this, url, deviceId, mode, folderName)
+        SyncService.startRestore(this, url, token, fingerprint, deviceId, mode, folderName)
     }
 
     /** 自动化测试入口：自动选当前绑定的设备（或第一台）恢复 */
-    private fun autoRestore(url: String, mode: RestoreRunner.Mode, folderName: String) {
+    private fun autoRestore(url: String, token: String, fingerprint: String, mode: RestoreRunner.Mode, folderName: String) {
         lifecycleScope.launch {
             val devices = try {
-                withContext(Dispatchers.IO) { HubClient(url).devices() }
+                withContext(Dispatchers.IO) { HubClient(url, token, fingerprint).devices() }
             } catch (e: Exception) {
                 log("读取设备列表失败：${e.message}")
                 emptyList()
@@ -712,7 +777,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 log("自动恢复：来源「${target.name}」，方式 新建文件夹「$folder」")
             }
-            runRestore(url, target.id, mode, folder)
+            runRestore(url, token, fingerprint, target.id, mode, folder)
         }
     }
 

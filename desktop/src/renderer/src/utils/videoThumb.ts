@@ -110,8 +110,8 @@ async function extractFrame(base: string, id: number): Promise<Blob | null> {
   video.src = fileUrl(base, id)
   video.muted = true
   video.preload = 'auto'
-  // 从 http://127.0.0.1:<端口> 取视频再画到 canvas：不声明 anonymous 的话 canvas 会被跨域污染，
-  // toBlob 直接抛 SecurityError（Hub 已经回了 Access-Control-Allow-Origin: *）
+  // 从本机 Hub 取视频再画到 canvas：不声明 anonymous 的话 canvas 会被跨域污染，
+  // toBlob 直接抛 SecurityError（Hub 会对受信任的桌面来源返回 CORS 许可）
   video.crossOrigin = 'anonymous'
   video.style.position = 'fixed'
   video.style.left = '-10000px'

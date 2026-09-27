@@ -6,7 +6,9 @@ import {
   useState,
   type DragEvent as ReactDragEvent,
   type JSX,
-  type MouseEvent as ReactMouseEvent
+  type MouseEvent as ReactMouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
 } from 'react'
 import type { MediaRecord } from '@shared/types'
 import { thumbUrl } from '../api'
@@ -66,6 +68,8 @@ export default function VirtualGrid({
   const [viewport, setViewport] = useState(600)
   const [contentHeight, setContentHeight] = useState(0)
   const [scrollDate, setScrollDate] = useState('')
+  const scrollDatePointerId = useRef<number | null>(null)
+  const [draggingScrollDate, setDraggingScrollDate] = useState(false)
   // 订阅选中集合：变化时触发重渲染，只影响视口内的这些格子（虚拟滚动，量很小）
   useSelectionVersion()
 
@@ -418,6 +422,98 @@ export default function VirtualGrid({
     return (scrollTop / maxScroll) * (trackHeight - thumbHeight) + thumbHeight / 2
   }, [contentHeight, scrollTop, viewport])
 
+  /**
+   * 日期气泡是原生滚动条滑块的可见代理。浏览器不会把原生滚动条暴露成 DOM，
+   * 所以拖动气泡时按同一套滑块几何公式换算回 scrollTop；原生滚动条滚动时，
+   * 上面的 scrollTop 状态又会反过来更新气泡位置。
+   */
+  const scrollToClientY = useCallback((clientY: number): void => {
+    const scroller = containerRef.current
+    const wrap = wrapRef.current
+    if (!scroller || !wrap) return
+
+    const trackHeight = scroller.clientHeight
+    const maxScroll = scroller.scrollHeight - trackHeight
+    if (maxScroll <= 0 || trackHeight <= 0) return
+
+    const thumbHeight = Math.min(
+      trackHeight,
+      Math.max(24, (trackHeight * trackHeight) / Math.max(scroller.scrollHeight, 1))
+    )
+    const trackRange = Math.max(1, trackHeight - thumbHeight)
+    const wrapRect = wrap.getBoundingClientRect()
+    const pointerY = clientY - wrapRect.top
+    const minCenter = thumbHeight / 2
+    const maxCenter = trackHeight - thumbHeight / 2
+    const center = Math.min(Math.max(pointerY, minCenter), maxCenter)
+    scroller.scrollTop = ((center - minCenter) / trackRange) * maxScroll
+  }, [])
+
+  const finishScrollDateDrag = useCallback(
+    (event: ReactPointerEvent<HTMLElement>): void => {
+      if (scrollDatePointerId.current !== event.pointerId) return
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      scrollDatePointerId.current = null
+      setDraggingScrollDate(false)
+    },
+    []
+  )
+
+  const onScrollDatePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLElement>): void => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      scrollDatePointerId.current = event.pointerId
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setDraggingScrollDate(true)
+      scrollToClientY(event.clientY)
+    },
+    [scrollToClientY]
+  )
+
+  const onScrollDatePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLElement>): void => {
+      if (scrollDatePointerId.current !== event.pointerId) return
+      event.preventDefault()
+      scrollToClientY(event.clientY)
+    },
+    [scrollToClientY]
+  )
+
+  const onScrollDateKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>): void => {
+    const scroller = containerRef.current
+    if (!scroller) return
+    const page = Math.max(1, scroller.clientHeight - 48)
+    let next: number | null = null
+    switch (event.key) {
+      case 'ArrowUp':
+        next = scroller.scrollTop - 48
+        break
+      case 'ArrowDown':
+        next = scroller.scrollTop + 48
+        break
+      case 'PageUp':
+        next = scroller.scrollTop - page
+        break
+      case 'PageDown':
+        next = scroller.scrollTop + page
+        break
+      case 'Home':
+        next = 0
+        break
+      case 'End':
+        next = scroller.scrollHeight - scroller.clientHeight
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    scroller.scrollTop = Math.min(Math.max(next, 0), Math.max(0, scroller.scrollHeight - scroller.clientHeight))
+  }, [])
+
   /** 滑块中点这条横线落在哪一行上（二分查找，行的高度不等） */
   const midRowIndex = useMemo(() => {
     if (thumbCenter === null || rows.length === 0) return -1
@@ -462,10 +558,10 @@ export default function VirtualGrid({
 
   // 停止滚动 1.5 秒后隐去（每次滚动都重新计时，不然同一天内连续滚动会中途消失）
   useEffect(() => {
-    if (!visibleLabel) return
+    if (!visibleLabel || draggingScrollDate) return
     const timer = window.setTimeout(() => setScrollDate(''), 1500)
     return () => window.clearTimeout(timer)
-  }, [scrollTop, visibleLabel])
+  }, [draggingScrollDate, scrollTop, visibleLabel])
 
   const body =
     rows.length === 0 ? (
@@ -524,9 +620,37 @@ export default function VirtualGrid({
       </div>
       {/* 框选用的橡皮筋框：位置每帧直接写 DOM（不动 React 状态），跟手且不触发重渲染 */}
       <div className="marquee" ref={marqueeRef} style={{ display: 'none' }} />
-      {scrollDate ? (
+      {thumbCenter !== null ? (
         <div
+          className="scroll-rail"
+          role="scrollbar"
+          aria-orientation="vertical"
+          aria-label="拖动时间线滚动条"
+          aria-valuemin={0}
+          aria-valuemax={Math.max(0, contentHeight - viewport)}
+          aria-valuenow={Math.round(scrollTop)}
+          tabIndex={0}
+          onPointerDown={onScrollDatePointerDown}
+          onPointerMove={onScrollDatePointerMove}
+          onPointerUp={finishScrollDateDrag}
+          onPointerCancel={finishScrollDateDrag}
+          onLostPointerCapture={finishScrollDateDrag}
+          onKeyDown={onScrollDateKeyDown}
+        />
+      ) : null}
+      {scrollDate ? (
+        <button
+          type="button"
           className="scroll-date"
+          aria-label={`拖动或点击查看${scrollDate}附近的照片`}
+          title="拖动或点击查看其他日期"
+          data-dragging={draggingScrollDate ? 'true' : 'false'}
+          onPointerDown={onScrollDatePointerDown}
+          onPointerMove={onScrollDatePointerMove}
+          onPointerUp={finishScrollDateDrag}
+          onPointerCancel={finishScrollDateDrag}
+          onLostPointerCapture={finishScrollDateDrag}
+          onKeyDown={onScrollDateKeyDown}
           style={{
             // 跟着滚动条滑块中点走；上下留点余量，免得贴边溢出
             top:
@@ -536,7 +660,7 @@ export default function VirtualGrid({
           }}
         >
           {scrollDate}
-        </div>
+        </button>
       ) : null}
     </div>
   )

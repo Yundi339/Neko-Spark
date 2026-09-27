@@ -19,6 +19,8 @@ import { cpSync, existsSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
 const projectRoot = resolve(import.meta.dirname, '..')
 /**
  * 仓库根 = desktop/ 的上一级。
@@ -119,7 +121,7 @@ console.log('· 启动程序…')
 spawn('cmd', ['/c', 'start', '', join(targetDir, appName)], { detached: true, stdio: 'ignore' }).unref()
 
 // ---------- 4) 验证：Hub 起来 + 数据还在 ----------
-const base = `http://127.0.0.1:${hubPort}/api/v1`
+const base = `https://127.0.0.1:${hubPort}/api/v1`
 let info = null
 for (let i = 0; i < 60 && !info; i += 1) {
   await sleep(1000)
@@ -133,7 +135,7 @@ for (let i = 0; i < 60 && !info; i += 1) {
 if (!info) fail('程序启动了但 Hub 没起来，请检查')
 
 console.log(`✓ 部署完成，服务已就绪（${base}）`)
-console.log(`  数据目录: ${info.dataDir}`)
+console.log('  数据目录: 请在桌面端设置页查看（Hub 不通过 HTTP 泄露本机路径）')
 console.log(
   `  媒体 ${info.counts.media} 项 · 回收站 ${info.counts.trash} 项 · 设备 ${info.counts.devices} 个 · 内容 ${info.counts.blobs} 个`
 )

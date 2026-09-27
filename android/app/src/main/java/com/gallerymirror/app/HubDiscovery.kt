@@ -19,8 +19,8 @@ object HubDiscovery {
     private const val DISCOVERY_PORT = 8788
     private const val REQUEST = "GALLERY_MIRROR_DISCOVER"
 
-    data class Found(val name: String, val host: String, val port: Int, val version: String) {
-        val url: String get() = "http://$host:$port"
+    data class Found(val name: String, val host: String, val port: Int, val version: String, val fingerprint: String) {
+        val url: String get() = "https://$host:$port"
     }
 
     fun search(context: Context, timeoutMs: Long = 3000): List<Found> {
@@ -57,12 +57,18 @@ object HubDiscovery {
                         socket.receive(packet)
                         val json = JSONObject(String(packet.data, 0, packet.length).trim())
                         val port = json.optInt("port", 8787)
+                        if (port !in 1..65535) continue
                         val host = packet.address?.hostAddress ?: continue
+                        val fingerprint = json.optString("fingerprint", "")
+                            .replace(Regex("[^0-9a-fA-F]"), "")
+                            .uppercase()
+                        if (fingerprint.length != 64) continue
                         results["$host:$port"] = Found(
-                            name = json.optString("name", "Neko_Spark"),
+                            name = json.optString("name", "Neko_Spark").take(255),
                             host = host,
                             port = port,
-                            version = json.optString("version", "")
+                            version = json.optString("version", "").take(64),
+                            fingerprint = fingerprint
                         )
                     } catch (_: SocketTimeoutException) {
                         // 继续等待其它电脑应答

@@ -15,7 +15,10 @@ class BackupRunner(private val context: Context) {
         // 手机端可以"认领"电脑上已有的设备，避免同一台手机重复建号
         prefs.getString("bound_device_id", null)?.takeIf { it.isNotBlank() }?.let { return it }
         val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
-        return "android-$androidId"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("Neko_Spark:$androidId".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "android-${digest.take(32)}"
     }
 
     fun deviceName(): String {
@@ -33,10 +36,12 @@ class BackupRunner(private val context: Context) {
 
     suspend fun run(
         baseUrl: String,
+        accessToken: String,
+        certificateFingerprint: String,
         onLog: (String) -> Unit,
         onProgress: (current: Int, total: Int, label: String, bytesDone: Long, bytesTotal: Long) -> Unit
     ): Result = withContext(Dispatchers.IO) {
-        val client = HubClient(baseUrl)
+        val client = HubClient(baseUrl, accessToken, certificateFingerprint)
 
         onLog("连接电脑端：$baseUrl")
         onLog("健康检查：${withRetry(onLog, "连接电脑端") { client.health() }}")

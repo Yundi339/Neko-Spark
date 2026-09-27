@@ -134,7 +134,6 @@ export interface HubHealth {
   name: string
   version: string
   protocolVersion: number
-  pid: number
   uptimeMs: number
   time: string
 }
@@ -181,6 +180,10 @@ export interface AppStatus {
   appName: string
   appVersion: string
   protocolVersion: number
+  /** 只通过本地 IPC 给桌面端设置页使用，不由 Hub HTTP 接口返回 */
+  hubToken: string
+  /** 自签名 Hub 证书 SHA-256 指纹，只通过本地 IPC 显示给用户核对 */
+  hubCertFingerprint: string
   dataDir: string
   dbPath: string
   runtimeDir: string

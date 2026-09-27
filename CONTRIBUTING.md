@@ -102,6 +102,8 @@ powershell -ExecutionPolicy Bypass -File android\scripts\android-emulator.ps1   
 4. 如果改了协议，两端都要改，并在 PR 描述里说明兼容性
 5. PR 描述里写清楚**改了什么、为什么、怎么验证的**
 
+提交 PR 到 `main` 或 `master` 会自动触发 GitHub Actions 门禁：桌面端类型检查、构建与端到端测试，Android 编译，依赖审计、依赖变更审查和敏感信息扫描。所有检查通过后才应合入主分支；主分支每次提交（包括 PR 合入产生的提交）会自动构建并发布 GitHub Release。
+
 ### 代码风格
 
 - **注释用中文**，风格是「解释**为什么**这么做」，不是复述代码在做什么

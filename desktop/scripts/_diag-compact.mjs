@@ -14,7 +14,7 @@ import sharp from 'sharp'
 
 const HUB_PORT = Number(process.argv[2] ?? 8806)
 const CDP_PORT = Number(process.argv[3] ?? 9333)
-const HUB = `http://127.0.0.1:${HUB_PORT}/api/v1`
+const HUB = `https://127.0.0.1:${HUB_PORT}/api/v1`
 const DAYS = 6
 const PER_DAY = 8
 

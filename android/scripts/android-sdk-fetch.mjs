@@ -6,7 +6,7 @@
  * 用法：
  *   node scripts/android-sdk-fetch.mjs <SDK目录> <包名...>
  * 例：
- *   node scripts/android-sdk-fetch.mjs D:\Android\Sdk "platforms;android-34" "build-tools;34.0.0"
+ *   node scripts/android-sdk-fetch.mjs <SDK目录> "platforms;android-34" "build-tools;34.0.0"
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'

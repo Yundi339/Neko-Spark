@@ -13,6 +13,9 @@ import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import sharp from 'sharp'
 
+// Smoke 只连接本机 Hub；Hub 使用每台机器自动生成的自签名证书。
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
 // 临时目录一律放**项目内**的 .cache/tmp —— 不用 C 盘的 %TEMP%（用户 C 盘敏感，2026-09-25 统一改）
 const SCRATCH_DIR = resolve(import.meta.dirname, '..', '.cache', 'tmp')
 mkdirSync(SCRATCH_DIR, { recursive: true })
@@ -181,7 +184,7 @@ try {
 
   // ---------- 一、Hub 服务 ----------
   console.log('一、Hub 服务')
-  const base = `http://127.0.0.1:${HUB_PORT}/api/v1`
+  const base = `https://127.0.0.1:${HUB_PORT}/api/v1`
   const health = await waitFor(async () => {
     const res = await fetch(`${base}/health`)
     return res.ok ? res.json() : null
@@ -189,7 +192,7 @@ try {
   check('健康检查返回 protocolVersion=1', health.protocolVersion === 1, `version=${health.version}`)
 
   const info0 = await (await fetch(`${base}/info`)).json()
-  check('仓库信息指向测试目录', info0.dataDir === dataDir, info0.dataDir)
+  check('仓库信息不泄露本机数据路径', !('dataDir' in info0) && !('dbPath' in info0))
   check('初始统计为 0', info0.counts.media === 0 && info0.counts.blobs === 0)
 
   const notFound = await fetch(`${base}/nope`)
@@ -406,7 +409,7 @@ try {
   console.log('六、协议 v1（mock-phone 全流程）')
   const mockRun = spawnSync(
     process.execPath,
-    [join(projectRoot, 'tools', 'mock-phone', 'index.mjs'), mockDir, '--url', `http://127.0.0.1:${HUB_PORT}`, '--device', '模拟手机'],
+    [join(projectRoot, 'tools', 'mock-phone', 'index.mjs'), mockDir, '--url', `https://127.0.0.1:${HUB_PORT}`, '--device', '模拟手机'],
     { encoding: 'utf-8' }
   )
   const mockOut = `${mockRun.stdout ?? ''}${mockRun.stderr ?? ''}`
@@ -1406,7 +1409,7 @@ try {
   })
   oldChild.stdout.on('data', () => {})
   oldChild.stderr.on('data', () => {})
-  const oldBase = `http://127.0.0.1:${HUB_PORT - 1}/api/v1`
+  const oldBase = `https://127.0.0.1:${HUB_PORT - 1}/api/v1`
   try {
     const oldHealth = await waitFor(async () => {
       try {
@@ -1416,7 +1419,7 @@ try {
         return null
       }
     }, 40000)
-    check('老库（v2 结构）能被新版本正常打开', oldHealth.protocolVersion === 1, `pid=${oldHealth.pid}`)
+    check('老库（v2 结构）能被新版本正常打开', oldHealth.protocolVersion === 1)
 
     const migrated = new DatabaseSync(oldDbPath, { readOnly: true })
     const mediaCols = migrated.prepare('PRAGMA table_info(media)').all().map((c) => c.name)

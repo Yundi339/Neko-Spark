@@ -1,7 +1,7 @@
 import type { AlbumRecord, DeviceRecord, MediaRecord } from '@shared/types'
 
 export function apiBase(port: number): string {
-  return `http://127.0.0.1:${port}/api/v1`
+  return `https://127.0.0.1:${port}/api/v1`
 }
 
 export function thumbUrl(base: string, mediaId: number): string {

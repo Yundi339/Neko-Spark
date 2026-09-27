@@ -22,7 +22,7 @@ const electronExe = join(projectRoot, 'node_modules', 'electron', 'dist', 'elect
 const HUB_PORT = 8801
 const N = 120
 const dataDir = mkdtempSync(join(SCRATCH_DIR, 'gm-diag-'))
-const base = `http://127.0.0.1:${HUB_PORT}/api/v1`
+const base = `https://127.0.0.1:${HUB_PORT}/api/v1`
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const t0 = Date.now()

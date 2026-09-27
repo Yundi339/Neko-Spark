@@ -66,18 +66,22 @@ class SyncService : Service() {
             ACTION_BACKUP -> {
                 begin(SyncKind.BACKUP, "正在备份到电脑", "正在连接电脑端…")
                 val hub = intent.getStringExtra(EXTRA_HUB).orEmpty()
-                job = scope.launch { runBackup(hub) }
+                val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
+                val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT).orEmpty()
+                job = scope.launch { runBackup(hub, token, fingerprint) }
             }
 
             ACTION_RESTORE -> {
                 begin(SyncKind.RESTORE, "正在从电脑恢复", "正在连接电脑端…")
                 val hub = intent.getStringExtra(EXTRA_HUB).orEmpty()
+                val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
+                val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT).orEmpty()
                 val deviceId = intent.getStringExtra(EXTRA_DEVICE).orEmpty()
                 val folder = intent.getStringExtra(EXTRA_FOLDER).orEmpty()
                 val mode =
                     if (intent.getBooleanExtra(EXTRA_NEW_FOLDER, false)) RestoreRunner.Mode.NEW_FOLDER
                     else RestoreRunner.Mode.MERGE
-                job = scope.launch { runRestore(hub, deviceId, mode, folder) }
+                job = scope.launch { runRestore(hub, token, fingerprint, deviceId, mode, folder) }
             }
 
             ACTION_STOP -> {
@@ -99,10 +103,12 @@ class SyncService : Service() {
 
     // ---------------- 任务 ----------------
 
-    private suspend fun runBackup(hub: String) {
+    private suspend fun runBackup(hub: String, token: String, fingerprint: String) {
         try {
             val result = BackupRunner(this).run(
                 hub,
+                token,
+                fingerprint,
                 onLog = { line -> push(detail = line) },
                 onProgress = { current, total, label, bytesDone, bytesTotal ->
                     val percent =
@@ -122,6 +128,8 @@ class SyncService : Service() {
 
     private suspend fun runRestore(
         hub: String,
+        token: String,
+        fingerprint: String,
         deviceId: String,
         mode: RestoreRunner.Mode,
         folderName: String
@@ -129,6 +137,8 @@ class SyncService : Service() {
         try {
             val result = RestoreRunner(this).run(
                 hub,
+                token,
+                fingerprint,
                 deviceId,
                 mode,
                 folderName,
@@ -284,6 +294,8 @@ class SyncService : Service() {
         const val ACTION_RESTORE = "com.gallerymirror.app.action.RESTORE"
         const val ACTION_STOP = "com.gallerymirror.app.action.STOP"
         const val EXTRA_HUB = "hub"
+        const val EXTRA_TOKEN = "token"
+        const val EXTRA_FINGERPRINT = "fingerprint"
         const val EXTRA_DEVICE = "device"
         const val EXTRA_FOLDER = "folder"
         const val EXTRA_NEW_FOLDER = "newFolder"
@@ -308,14 +320,23 @@ class SyncService : Service() {
             manager.createNotificationChannel(channel)
         }
 
-        fun startBackup(context: Context, hub: String) {
+        fun startBackup(context: Context, hub: String, token: String, fingerprint: String) {
             ensureChannel(context)
-            start(context, Intent(context, SyncService::class.java).setAction(ACTION_BACKUP).putExtra(EXTRA_HUB, hub))
+            start(
+                context,
+                Intent(context, SyncService::class.java)
+                    .setAction(ACTION_BACKUP)
+                    .putExtra(EXTRA_HUB, hub)
+                    .putExtra(EXTRA_TOKEN, token)
+                    .putExtra(EXTRA_FINGERPRINT, fingerprint)
+            )
         }
 
         fun startRestore(
             context: Context,
             hub: String,
+            token: String,
+            fingerprint: String,
             deviceId: String,
             mode: RestoreRunner.Mode,
             folderName: String
@@ -326,6 +347,8 @@ class SyncService : Service() {
                 Intent(context, SyncService::class.java)
                     .setAction(ACTION_RESTORE)
                     .putExtra(EXTRA_HUB, hub)
+                    .putExtra(EXTRA_TOKEN, token)
+                    .putExtra(EXTRA_FINGERPRINT, fingerprint)
                     .putExtra(EXTRA_DEVICE, deviceId)
                     .putExtra(EXTRA_FOLDER, folderName)
                     .putExtra(EXTRA_NEW_FOLDER, mode == RestoreRunner.Mode.NEW_FOLDER)

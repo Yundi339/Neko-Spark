@@ -25,12 +25,11 @@
          图标资源由 `node scripts/make-icon.mjs` 生成（含自适应图标，minSdk 26 起全支持）。
          ⚠️ applicationId 故意保持 com.gallerymirror.app 不变 —— 改了会被系统当成另一个 App。 -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="Neko_Spark"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.GalleryMirror">
         <activity
             android:name=".MainActivity"

@@ -124,7 +124,7 @@ try {
   )
   console.log('导入:', JSON.stringify(imported))
 
-  const base = `http://127.0.0.1:${HUB_PORT}/api/v1`
+  const base = `https://127.0.0.1:${HUB_PORT}/api/v1`
   const video = (await (await fetch(`${base}/media?kind=video`)).json()).media[0]
   if (!video) throw new Error('导入后没有视频记录')
   console.log(

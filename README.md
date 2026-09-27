@@ -2,7 +2,7 @@
 
 把安卓手机相册（图片 / 视频）备份到电脑，并以"手机相册一样的方式"浏览；之后可原样导出 / 迁移回手机（文件名、拍摄时间、目录结构都不变）。
 
-- **电脑端**：Electron 应用，同时充当本地服务 Hub（HTTP `8787` + UDP 发现 `8788`）
+- **电脑端**：Electron 应用，同时充当本地服务 Hub（HTTPS `8787` + UDP 发现 `8788`）
 - **安卓端**：Kotlin App，走自定义的 [协议 v1](docs/protocol-v1.md)
 - **去重**：内容寻址存储（`blobs/<sha前2位>/<sha>`），跨设备全局去重
 
@@ -66,6 +66,12 @@ npm.cmd run dist       # 打包安装版 + 便携版
 "生成测试图片 → 导入 → 模拟手机协议备份 → 检查界面/查看器/收藏 → 可逆合并 →
 已删除标记 → 导出还原 → 回收站 → 老库升级 → HEIC/BMP 兜底解码" 全链路。
 
+## CI 与自动发布
+
+- PR 指向 `main` 或 `master` 时自动执行：桌面端类型检查、构建与端到端测试，Android 编译，依赖审计、依赖变更审查和敏感信息扫描。
+- `main` / `master` 的每次提交都会在门禁通过后自动构建 Windows 安装版、便携版和 Android APK，并创建 GitHub Release。
+- PR 合入主分支后会产生主分支提交，因此会自动走同一套门禁和发布流程。版本标签格式为 `v<package-version>-build.<run-number>`。
+
 也可以直接验证打包产物：
 
 ```powershell
@@ -121,7 +127,8 @@ node scripts\prepare-stickers.mjs <源目录> ..\GalleryMirrorData\stickers
    随时可以「分离」；主设备视图会自动包含副设备。
 6. **手机已删除标记**：手机上删了照片，电脑**保留副本**并在缩略图右上角标「已删除」，
    设置页可控制是否显示。
-7. **手机备份**：同一 WiFi 下手机访问界面显示的局域网地址；USB 用 `adb forward tcp:8787 tcp:8787`。
+7. **手机备份**：Hub 强制使用 HTTPS，首次启动会自动生成并保存自签名证书；手机端首次连接时填写设置页显示的证书 SHA-256 指纹。
+   同一 WiFi/模拟器连接还需要填写「局域网访问密钥」；USB 用 `adb forward tcp:8787 tcp:8787`，回环连接可留空密钥。证书指纹可随局域网发现响应返回，访问密钥不会通过广播、日志或 HTTP 接口泄露。
 8. **回收站**：`Delete` 直接删除（不弹确认）→ 进回收站保留 **30 天** → 可「恢复」或「彻底删除」；
    侧栏有角标，格子右上角显示「剩 N 天」。**只影响电脑库，绝不碰手机上的文件**。
 9. **多选与拖出**：网格里可**框选**（Ctrl+单击加选 / Shift+单击范围选）；选中后可直接
@@ -132,7 +139,7 @@ node scripts\prepare-stickers.mjs <源目录> ..\GalleryMirrorData\stickers
 ### 模拟手机端（测试协议用）
 
 ```powershell
-node desktop\tools\mock-phone\index.mjs <文件夹> --url http://127.0.0.1:8787 --device 我的手机
+node desktop\tools\mock-phone\index.mjs <文件夹> --url https://127.0.0.1:8787 --device 我的手机
 ```
 
 ## 安卓端
@@ -178,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File android\scripts\android-test.ps1 -NoRun
 powershell -ExecutionPolicy Bypass -File android\scripts\android-emulator.ps1
 
 # 指定电脑端地址（真机用局域网 IP；模拟器用 10.0.2.2；USB 用 127.0.0.1:8787 + adb reverse）
-powershell -ExecutionPolicy Bypass -File android\scripts\android-test.ps1 -Hub http://192.168.1.5:8787
+powershell -ExecutionPolicy Bypass -File android\scripts\android-test.ps1 -Hub https://192.168.x.x:8787
 ```
 
 > ⚠️ **外网受限的环境必须加 `--offline`**：Gradle/JVM 不走系统代理，不加会卡死在配置阶段。
@@ -188,7 +195,7 @@ powershell -ExecutionPolicy Bypass -File android\scripts\android-test.ps1 -Hub h
 
 ```powershell
 node android\scripts\android-sdk-fetch.mjs --list "system-images;android-34"   # 搜索包
-node android\scripts\android-sdk-fetch.mjs D:\Android\Sdk "emulators;latest"   # 下载安装
+node android\scripts\android-sdk-fetch.mjs <SDK目录> "emulators;latest"   # 下载安装
 ```
 
 ## 打包与安装（不占 C 盘）
@@ -259,7 +266,7 @@ Neko-Spark/
 │  │  ├─ main/                   #    主进程
 │  │  │  ├─ index.ts             #      窗口、IPC、启动 Hub
 │  │  │  ├─ drag.ts              #      拖出到资源管理器（硬链接中转）
-│  │  │  └─ hub/                 #      HTTP 服务 + 数据层
+│  │  │  └─ hub/                 #      HTTPS 服务 + 数据层
 │  │  │     ├─ index.ts          #        协议 v1 + 媒体/缩略图/背景/贴图 + UDP 发现
 │  │  │     ├─ db.ts             #        node:sqlite 封装、建表与迁移
 │  │  │     ├─ config.ts         #        数据目录解析、运行时缓存重定向

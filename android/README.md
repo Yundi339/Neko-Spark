@@ -6,7 +6,7 @@
 它**不自己存储任何东西**，所有照片都交给电脑端保管。
 
 > 💻 **电脑端不在这个目录** —— Windows 程序在 [`../desktop/`](../desktop/)，
-> 它同时是本地服务 Hub（HTTP `8787`），手机连的就是它，所以**得先把它跑起来**。
+> 它同时是本地服务 Hub（HTTPS `8787`），手机连的就是它，所以**得先把它跑起来**。
 > 两端接口契约：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)　共用素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
 
 ---
@@ -19,7 +19,7 @@
 | Windows | `Neko_Spark-x.y.z-win-setup-x64.exe` | **电脑版** —— 另一半，必须先装它手机才有东西可连 |
 | Windows | `Neko_Spark-x.y.z-win-portable-x64.exe` | **电脑便携版** —— 免安装单文件 |
 
-全部在 **[Releases](https://github.com/jiuerya/Neko-Spark/releases)** 页（源码也分两份放在那里）。
+全部在 **[Releases](https://github.com/Yundi339/Neko-Spark/releases)** 页（源码也分两份放在那里）。
 
 ---
 
@@ -49,6 +49,8 @@ powershell -ExecutionPolicy Bypass -File android\scripts\android-emulator.ps1   
 ```
 
 > ⚠️ 外网受限的环境必须加 `--offline`，否则 Gradle 会卡死在配置阶段（详见 `ARCHITECTURE.md` §8）。
+
+首次连接时，把电脑端设置页的 HTTPS 证书 SHA-256 指纹填入手机输入框；WiFi/模拟器还要填写「局域网访问密钥」，USB 回环转发可留空密钥。
 
 ## 架构
 
