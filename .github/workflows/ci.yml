@@ -194,29 +194,43 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Rename Android artifact
+      - name: Prepare release assets
         shell: bash
         run: |
           set -euo pipefail
-          mv release-assets/app-debug.apk "release-assets/Neko_Spark-${{ steps.version.outputs.version }}-android-debug.apk"
+          mkdir -p release-upload
+          setup_file="$(find release-assets -maxdepth 1 -type f -name '*安装版.exe' -print -quit)"
+          portable_file="$(find release-assets -maxdepth 1 -type f -name '*便携版.exe' -print -quit)"
+          android_file="release-assets/Neko_Spark-${{ steps.version.outputs.version }}-android-debug.apk"
+          test -n "$setup_file" && test -n "$portable_file" && test -f "$android_file"
+          cp "$setup_file" release-upload/Neko_Spark-windows-setup.exe
+          cp "$portable_file" release-upload/Neko_Spark-windows-portable.exe
+          cp "$android_file" release-upload/Neko_Spark-android-debug.apk
 
-      - name: Create or update GitHub release
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=(release-assets/*)
-          if ((${#assets[@]} == 0)); then
-            echo 'No release artifacts were produced.' >&2
-            exit 1
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
-          else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
               --title "Neko_Spark ${RELEASE_TAG}" \
               --generate-notes
           fi
+
+      - name: Upload GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" release-upload/* --clobber; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
