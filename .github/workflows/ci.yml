@@ -63,6 +63,9 @@ jobs:
 
   android:
     name: Android compile and APK build
+    outputs:
+      version_name: ${{ steps.release-version.outputs.version_name }}
+      version_code: ${{ steps.release-version.outputs.version_code }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -85,21 +88,95 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Calculate Beijing release version
+        id: release-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(TZ=Asia/Shanghai date '+%Y.%m.%d-%H%M%S')"
+          version_code="$(TZ=Asia/Shanghai date '+%s')"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace --console=plain
+        run: gradle assembleDebugAppDebug -PversionName="${{ steps.release-version.outputs.version_name }}" -PversionCode="${{ steps.release-version.outputs.version_code }}" --no-daemon --stacktrace --console=plain
+
+      - name: Prepare formal release signing
+        id: release-signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          values=(
+            "$ANDROID_KEYSTORE_BASE64"
+            "$ANDROID_KEYSTORE_PASSWORD"
+            "$ANDROID_KEY_ALIAS"
+            "$ANDROID_KEY_PASSWORD"
+          )
+          present=0
+          missing=0
+          for value in "${values[@]}"; do
+            if [[ -n "$value" ]]; then
+              present=$((present + 1))
+            else
+              missing=$((missing + 1))
+            fi
+          done
+          if (( present == 0 )); then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( missing != 0 )); then
+            echo 'Formal Android signing requires all four secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.' >&2
+            exit 1
+          fi
+          keystore_path="$RUNNER_TEMP/neko-spark-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "path=$keystore_path" >> "$GITHUB_OUTPUT"
+
+      - name: Build formal release APK
+        if: steps.release-signing.outputs.configured == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ steps.release-signing.outputs.path }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle assembleFormalAppRelease -PversionName="${{ steps.release-version.outputs.version_name }}" -PversionCode="${{ steps.release-version.outputs.version_code }}" --no-daemon --stacktrace --console=plain
 
       - name: Verify APK signature
         run: >-
           "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
-          verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk
+          verify --print-certs android/app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
+
+      - name: Verify formal APK signature
+        if: steps.release-signing.outputs.configured == 'true'
+        run: >-
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          verify --print-certs android/app/build/outputs/apk/formalApp/release/app-formalApp-release.apk
 
       - name: Upload Android release artifact
         if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
         uses: actions/upload-artifact@v4
         with:
           name: android-release
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
+          # 正式签名未配置时仍保留 debug 发布链路；配置 Secrets 后会同时上传 release APK。
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload formal Android release artifact
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master') && steps.release-signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-formal-release
+          path: android/app/build/outputs/apk/formalApp/release/app-formalApp-release.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -189,8 +266,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(node -p "require('./desktop/package.json').version")"
-          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          version="${{ needs.android.outputs.version_name }}"
+          tag="v${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
@@ -201,11 +278,14 @@ jobs:
           mkdir -p release-upload
           setup_file="$(find release-assets -maxdepth 1 -type f -name '*安装版.exe' -print -quit)"
           portable_file="$(find release-assets -maxdepth 1 -type f -name '*便携版.exe' -print -quit)"
-          android_file="release-assets/app-debug.apk"
+          android_file="release-assets/app-debugApp-debug.apk"
           test -n "$setup_file" && test -n "$portable_file" && test -f "$android_file"
           cp "$setup_file" release-upload/Neko_Spark-windows-setup.exe
           cp "$portable_file" release-upload/Neko_Spark-windows-portable.exe
           cp "$android_file" release-upload/Neko_Spark-android-debug.apk
+          if [[ -f release-assets/app-formalApp-release.apk ]]; then
+            cp release-assets/app-formalApp-release.apk release-upload/Neko_Spark-android-release.apk
+          fi
 
       - name: Create GitHub release
         env:

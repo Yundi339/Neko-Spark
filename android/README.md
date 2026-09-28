@@ -36,9 +36,30 @@ sdk.dir=D\:\\Android\\Sdk
 
 ```bash
 cd android
-gradle assembleDebug --offline --console=plain --no-daemon
-# 产物：android/app/build/outputs/apk/debug/app-debug.apk
+gradle assembleDebugAppDebug --offline --console=plain --no-daemon
+# 产物：android/app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
 ```
+
+当前包名（`applicationId`）是：正式版 `com.gallerymirror.jiuerya`，debug 版 `com.gallerymirror.jiuerya_debug`。
+本机可一次生成 debug 和正式 release 两个 APK：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File android\scripts\build-apks.ps1
+# 产物：.codex/artifacts/Neko_Spark-android-debug.apk
+#       .codex/artifacts/Neko_Spark-android-release.apk
+```
+
+debug APK 使用 Android 自动生成的 debug 证书。正式 APK 使用环境变量注入的 release keystore：
+
+```text
+ANDROID_KEYSTORE_PATH
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+GitHub Actions 另外读取 `ANDROID_KEYSTORE_BASE64`，在运行器临时目录还原 keystore；四个 GitHub Secrets
+必须全部配置才会发布正式 APK。正式 keystore、密码和本机签名配置均不应提交到仓库。
 
 仓库里的辅助脚本：
 

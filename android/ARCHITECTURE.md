@@ -133,7 +133,7 @@ powershell -ExecutionPolicy Bypass -File scripts\android-test.ps1 -Hub https://1
 直接调 Gradle：
 
 ```bash
-gradle -p android assembleDebug --offline --console=plain --no-daemon
+gradle -p android assembleDebugAppDebug --offline --console=plain --no-daemon
 ```
 
 > ⚠️ **外网受限的环境必须加 `--offline`**：Gradle/JVM 不走系统代理，不加会卡死在配置阶段

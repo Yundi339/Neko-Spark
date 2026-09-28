@@ -23,7 +23,7 @@
 
     <!-- 图标与名字和电脑端保持一致（Neko_Spark + 那个猫猫头，2026-09-25 用户要求）。
          图标资源由 `node scripts/make-icon.mjs` 生成（含自适应图标，minSdk 26 起全支持）。
-         ⚠️ applicationId 故意保持 com.gallerymirror.app 不变 —— 改了会被系统当成另一个 App。 -->
+         applicationId 由 Gradle 设置为正式版 com.gallerymirror.jiuerya，debug 版追加 _debug。 -->
     <application
         android:allowBackup="false"
         android:label="Neko_Spark"

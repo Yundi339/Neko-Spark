@@ -46,6 +46,8 @@ android/local.properties
 android/.idea/
 *.apk
 *.aab
+*.jks
+*.keystore
 
 # 编辑器 / 系统
 .idea/

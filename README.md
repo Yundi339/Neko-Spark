@@ -70,7 +70,7 @@ npm.cmd run dist       # 打包安装版 + 便携版
 
 - PR 指向 `main` 或 `master` 时自动执行：桌面端类型检查、构建与端到端测试，Android 编译，依赖审计、依赖变更审查和敏感信息扫描。
 - `main` / `master` 的每次提交都会在门禁通过后自动构建 Windows 安装版、便携版和 Android APK，并创建 GitHub Release。
-- PR 合入主分支后会产生主分支提交，因此会自动走同一套门禁和发布流程。版本标签格式为 `v<package-version>-build.<run-number>`。
+- PR 合入主分支后会产生主分支提交，因此会自动走同一套门禁和发布流程。版本标签使用东八区发布时间，格式为 `vYYYY.MM.DD-HHmmss`。
 
 也可以直接验证打包产物：
 
@@ -174,8 +174,8 @@ sdk.dir=D\:\\Android\\Sdk
 ```powershell
 # 直接构建
 cd android
-gradle assembleDebug --offline --console=plain --no-daemon
-# 产物：android\app\build\outputs\apk\debug\app-debug.apk
+gradle assembleDebugAppDebug --offline --console=plain --no-daemon
+# 产物：android\app\build\outputs\apk\debugApp\debug\app-debugApp-debug.apk
 
 # 或走辅助脚本（构建 + 安装到设备 + 可选自动跑一次备份）
 powershell -ExecutionPolicy Bypass -File android\scripts\android-test.ps1

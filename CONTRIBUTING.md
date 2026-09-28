@@ -67,8 +67,8 @@ sdk.dir=D\:\\Android\\Sdk
 
 ```bash
 cd android
-gradle assembleDebug --offline --console=plain --no-daemon
-# 产物：app/build/outputs/apk/debug/app-debug.apk
+gradle assembleDebugAppDebug --offline --console=plain --no-daemon
+# 产物：app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
 ```
 
 仓库里的辅助脚本：
@@ -98,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File android\scripts\android-emulator.ps1   
 1. Fork 本仓库，从默认分支切一个描述性的分支名
 2. 只改你需要的那部分，避免顺手做无关的重构（review 会容易很多）
 3. **只跑你改动那一端的构建/测试** —— 改电脑端跑 `cd desktop && npm test`；
-   改安卓端跑 `gradle assembleDebug`
+   改安卓端跑 `gradle assembleDebugAppDebug`
 4. 如果改了协议，两端都要改，并在 PR 描述里说明兼容性
 5. PR 描述里写清楚**改了什么、为什么、怎么验证的**
 
