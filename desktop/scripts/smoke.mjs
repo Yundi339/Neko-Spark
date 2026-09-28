@@ -1864,16 +1864,30 @@ try {
     await closeViewerIfOpen(evaluate)
     await evaluate(`document.querySelectorAll('.nav-item')[0].click(); true`)
     await sleep(600)
-    let tileFound = false
-    for (let i = 0; i < 40 && !tileFound; i += 1) {
-      tileFound = await evaluate(`!!document.querySelector('.tile[data-id="${heicRow.id}"]')`)
-      if (tileFound) break
-      await evaluate(`(() => {
-        const grid = document.querySelector('.vgrid');
-        if (grid) { grid.scrollTop += 520; grid.dispatchEvent(new Event('scroll')); }
-        return true;
-      })()`)
-      await sleep(200)
+    const seekGridTile = async (id) => {
+      for (let i = 0; i < 50; i += 1) {
+        const state = JSON.parse(
+          await evaluate(`(() => {
+            const grid = document.querySelector('.vgrid');
+            const tile = document.querySelector('.tile[data-id="${id}"]');
+            if (tile) return JSON.stringify({ found: true });
+            if (grid) {
+              const step = Math.max(grid.clientHeight * 1.5, 520);
+              const next = Math.min(grid.scrollHeight, grid.scrollTop + step);
+              grid.scrollTop = next === grid.scrollTop ? grid.scrollHeight : next;
+              grid.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }
+            return JSON.stringify({ found: false });
+          })()`)
+        )
+        if (state.found) return true
+        await sleep(200)
+      }
+      return false
+    }
+    const tileFound = await seekGridTile(heicRow.id)
+    if (!tileFound) {
+      console.log(`  HEIC 格子定位诊断：${await evaluate(`JSON.stringify({ top: document.querySelector('.vgrid')?.scrollTop, height: document.querySelector('.vgrid')?.scrollHeight, tiles: Array.from(document.querySelectorAll('.tile[data-id]')).map((el) => el.dataset.id) })`)}`)
     }
     if (tileFound) {
       await evaluate(`document.querySelector('.tile[data-id="${heicRow.id}"]').click(); true`)
@@ -1908,17 +1922,7 @@ try {
     // 反过来：能直接显示的格式（JPEG）**不该**走 /preview —— 渲染端只在必要时才用它
     if (jpegRow) {
       await closeViewerIfOpen(evaluate)
-      let jpegTile = false
-      for (let i = 0; i < 40 && !jpegTile; i += 1) {
-        jpegTile = await evaluate(`!!document.querySelector('.tile[data-id="${jpegRow.id}"]')`)
-        if (jpegTile) break
-        await evaluate(`(() => {
-          const grid = document.querySelector('.vgrid');
-          if (grid) { grid.scrollTop += 520; grid.dispatchEvent(new Event('scroll')); }
-          return true;
-        })()`)
-        await sleep(200)
-      }
+      const jpegTile = await seekGridTile(jpegRow.id)
       if (jpegTile) {
         await evaluate(`document.querySelector('.tile[data-id="${jpegRow.id}"]').click(); true`)
         const jpegSrc = await waitFor(async () => {
