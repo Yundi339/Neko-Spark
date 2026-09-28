@@ -1814,6 +1814,17 @@ try {
   const jpegRow = (await (await fetch(`${base}/media`)).json()).media.find((m) => m.mime === 'image/jpeg')
 
   if (heicRow) {
+    // 前面的导入/回收站段落会连续触发多次 data:changed；云端窗口调度下，
+    // renderer 可能仍停在旧的 9 条列表。重新加载页面让预览 UI 明确以当前 API 数据为准。
+    const expectedVisibleMedia = (await (await fetch(`${base}/media`)).json()).media.length
+    await evaluate(`window.location.reload(); true`)
+    await waitFor(
+      async () => {
+        const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
+        return text.includes(`${expectedVisibleMedia} 项媒体`) ? text : null
+      },
+      20000
+    )
     const previewRes = await waitFor(async () => {
       const res = await fetch(`${base}/preview/${heicRow.id}`)
       return res.ok ? res : null
