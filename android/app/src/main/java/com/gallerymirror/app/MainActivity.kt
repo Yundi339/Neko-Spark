@@ -2,12 +2,16 @@ package com.gallerymirror.app
 
 import android.Manifest
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.text.InputFilter
 import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.view.Gravity
@@ -18,6 +22,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,7 +48,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var scanButton: Button
     private lateinit var backupButton: Button
     private lateinit var restoreButton: Button
+    private lateinit var overlaySwitch: Switch
     private var afterPermission: (() -> Unit)? = null
+
+    private val qrScannerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                handlePairIntent(result.data)
+            }
+        }
 
     private val colorText: Int get() = ContextCompat.getColor(this, R.color.gm_text)
     private val colorDim: Int get() = ContextCompat.getColor(this, R.color.gm_text_dim)
@@ -153,6 +166,24 @@ class MainActivity : ComponentActivity() {
             }
         )
 
+        val pairRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val pairButton = styledButton("输入配对码", primary = false).apply {
+            setOnClickListener { promptPairingCode(saveUrl(), saveFingerprint()) }
+        }
+        val scanPairButton = styledButton("扫一扫配对", primary = false).apply {
+            setOnClickListener { startQrScanner() }
+        }
+        pairRow.addView(pairButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        pairRow.addView(scanPairButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = dp(8)
+        })
+        card.addView(pairRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        })
+
         card.addView(TextView(this).apply {
             text = "局域网访问密钥"
             textSize = 12f
@@ -235,6 +266,34 @@ class MainActivity : ComponentActivity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
         )
 
+        overlaySwitch = Switch(this).apply {
+            text = "同步时显示悬浮窗进度"
+            textSize = 13f
+            setTextColor(colorText)
+            isChecked = prefs.getBoolean("overlay_enabled", false)
+        }
+        overlaySwitch.setOnCheckedChangeListener { button, checked ->
+            if (checked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                button.isChecked = false
+                log("请在系统设置中允许悬浮窗权限，允许后再打开此开关")
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }
+            } else {
+                prefs.edit().putBoolean("overlay_enabled", checked).apply()
+                log(if (checked) "已开启同步悬浮窗" else "已关闭同步悬浮窗")
+            }
+        }
+        card.addView(overlaySwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6)
+        })
+        card.addView(TextView(this).apply {
+            text = "仅在备份/恢复运行期间显示；外圈从 12 点方向按顺时针表示实时进度。"
+            textSize = 11f
+            setTextColor(colorDim)
+            setPadding(0, 0, 0, dp(2))
+        })
+
         root.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
 
         // ---------- 状态 + 进度条 ----------
@@ -302,6 +361,22 @@ class MainActivity : ComponentActivity() {
             val folder = intent.getStringExtra("restorefolder") ?: ""
             logText.postDelayed({ ensurePermissionThen { autoRestore(saveUrl(), saveToken(), saveFingerprint(), mode, folder) } }, 500)
         }
+        handlePairIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handlePairIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::overlaySwitch.isInitialized) {
+            val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+            val enabled = allowed && prefs.getBoolean("overlay_enabled", false)
+            if (overlaySwitch.isChecked != enabled) overlaySwitch.isChecked = enabled
+        }
     }
 
     /** 搜索局域网里的电脑端 Hub（一个局域网可能有多台） */
@@ -325,7 +400,7 @@ class MainActivity : ComponentActivity() {
                         saveUrl()
                         saveFingerprint()
                         log("已选择电脑：${target.name}  ${target.url}")
-                        testConnection()
+                        promptPairingCode(target.url, target.fingerprint)
                     }
                     .setNegativeButton("取消", null)
                     .show()
@@ -437,6 +512,84 @@ class MainActivity : ComponentActivity() {
         val url = urlInput.text.toString().trim().ifEmpty { defaultHubUrl() }
         prefs.edit().putString("hub_url", url).apply()
         return url
+    }
+
+    private fun startQrScanner() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), QrScannerActivity.REQUEST_CAMERA)
+            log("请再次点击“扫一扫配对”打开二维码扫描")
+            return
+        }
+        qrScannerLauncher.launch(Intent(this, QrScannerActivity::class.java))
+    }
+
+    private fun handlePairIntent(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme != "neko-spark" || data.host != "pair") return
+        val url = data.getQueryParameter("url").orEmpty()
+        val fingerprint = data.getQueryParameter("fingerprint").orEmpty()
+        val code = data.getQueryParameter("code").orEmpty()
+        if (url.isBlank() || fingerprint.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            log("二维码内容不完整，未开始配对")
+            return
+        }
+        urlInput.setText(url)
+        fingerprintInput.setText(fingerprint)
+        pairHub(url, fingerprint, code)
+    }
+
+    private fun promptPairingCode(url: String, fingerprint: String) {
+        if (url.isBlank() || fingerprint.isBlank()) {
+            log("请先搜索电脑或填写 HTTPS 地址与证书指纹")
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "6 位配对码"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            filters = arrayOf(InputFilter.LengthFilter(6))
+            setSingleLine()
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("输入电脑端配对码")
+            .setMessage("配对码在电脑端设置页显示，有效期 10 分钟且成功后立即失效")
+            .setView(input)
+            .setPositiveButton("开始配对") { _, _ ->
+                val code = input.text.toString().trim()
+                if (!code.matches(Regex("\\d{6}"))) {
+                    log("配对码必须是 6 位数字")
+                } else {
+                    pairHub(url, fingerprint, code)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun pairHub(url: String, fingerprint: String, code: String) {
+        statusText.text = "配对中..."
+        lifecycleScope.launch {
+            try {
+                val runner = BackupRunner(this@MainActivity)
+                val result = withContext(Dispatchers.IO) {
+                    HubClient(url, "", fingerprint).pair(code, runner.deviceId(), runner.deviceName())
+                }
+                urlInput.setText(url)
+                fingerprintInput.setText(fingerprint)
+                tokenInput.setText(result.token)
+                prefs.edit()
+                    .putString("hub_url", url)
+                    .putString("hub_fingerprint", fingerprint)
+                    .putString("hub_token", result.token)
+                    .apply()
+                statusText.text = "配对成功"
+                log("已与电脑端配对，访问密钥已安全保存到应用私有配置")
+                testConnection()
+            } catch (e: Exception) {
+                statusText.text = "配对失败"
+                log("配对失败：${e.message}")
+            }
+        }
     }
 
     private fun saveToken(): String {

@@ -22,12 +22,14 @@ android/
 │     ├─ java/com/gallerymirror/app/
 │     │  ├─ MainActivity.kt     界面（程序化构建，蓝白风格）+ 全部交互/弹窗/权限
 │     │  ├─ MediaScanner.kt     MediaStore 扫描（图片 + 视频）
-│     │  ├─ HubClient.kt        协议 v1 客户端（health/manifest/upload/commit/devices/media/download）
+│     │  ├─ HubClient.kt        协议 v1 客户端（pair/health/manifest/upload/commit/devices/media/download）
 │     │  ├─ BackupRunner.kt     备份流程编排（SHA-256 本地缓存）
 │     │  ├─ RestoreRunner.kt    恢复流程（合并 / 新建文件夹两种模式）
 │     │  ├─ SyncService.kt      前台服务：后台传输 + 静默进度通知
 │     │  ├─ Retry.kt            断线自动重连（指数退避）
-│     │  ├─ HubDiscovery.kt     UDP 局域网搜索电脑
+│     │  ├─ HubDiscovery.kt     mDNS 优先、UDP 兼容兜底的局域网搜索
+│     │  ├─ QrScannerActivity.kt 二维码配对扫描
+│     │  ├─ SyncProgressOverlay.kt 可选悬浮进度窗
 │     │  └─ Stickers.kt         读取打包进 APK 的贴图
 │     └─ res/                   图标、吉祥物、颜色、主题
 ├─ scripts/                     构建 / 安装 / 模拟器辅助脚本
@@ -87,7 +89,9 @@ MediaStore 扫描
 
 ## 5. 局域网发现
 
-`HubDiscovery.kt` 用 UDP 广播（端口 8788）搜索局域网内所有 Hub，弹窗选择。
+`HubDiscovery.kt` 优先用 Android `NsdManager` 搜索 `_neko-spark._tcp`，读取电脑端地址、端口、版本和证书指纹；
+发现失败时继续用 UDP 广播（端口 8788）兼容旧版电脑端。选中电脑后输入设置页显示的一次性 6 位配对码，
+手机通过 HTTPS `/api/v1/pair` 换取访问密钥。设置页二维码也可由应用内扫描页直接识别，二维码不包含访问密钥。
 模拟器会自动补 `10.0.2.2`（宿主机的别名）。
 
 ## 6. 权限
@@ -99,7 +103,12 @@ FOREGROUND_SERVICE
 FOREGROUND_SERVICE_DATA_SYNC
 POST_NOTIFICATIONS                         （运行时；拒绝了也能传，只是看不见通知）
 WAKE_LOCK
+CAMERA                                    （仅点击“扫一扫配对”时请求）
+SYSTEM_ALERT_WINDOW                        （用户开启悬浮窗进度时请求）
 ```
+
+悬浮窗是可选功能。允许后，前台同步服务会显示软件图标和蓝色圆环；圆环从 12 点方向开始按顺时针表示进度，
+任务结束或服务退出时移除。没有权限、用户关闭开关或厂商 ROM 拒绝覆盖层时，后台同步和通知栏进度仍然照常工作。
 
 ## 7. 贴图是怎么进 APK 的
 

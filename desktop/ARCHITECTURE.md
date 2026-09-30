@@ -21,6 +21,7 @@
 ```
 环境变量 GALLERY_MIRROR_DATA
   → 程序目录下的 data-location.json
+  → 用户级 Neko_Spark/data-location.json（安装到另一个目录时继续沿用原仓库）
   → 默认：开发模式 = <cwd>/.data
           安装版 = <exe 目录的父目录>/GalleryMirrorData
           便携版 = <exe 目录>/GalleryMirrorData
@@ -34,7 +35,7 @@ NSIS 升级/卸载会清空安装目录，数据放里面会被一起删除。
 
 ```
 主进程 (src/main/index.ts)
-├─ 启动 Hub（HTTPS 8787 + UDP 发现 8788）
+├─ 启动 Hub（HTTPS 8787 + mDNS `_neko-spark._tcp` + UDP 发现 8788 兜底）
 ├─ 创建窗口、注册 IPC、转发 data:changed
 └─ thumb-pool（utilityProcess 子进程池）
       └─ thumb-worker.ts —— 唯一碰 sharp 的地方

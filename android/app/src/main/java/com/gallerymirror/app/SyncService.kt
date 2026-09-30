@@ -56,6 +56,7 @@ class SyncService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var progressOverlay: SyncProgressOverlay? = null
     private var lastNotifyAt = 0L
     private var lastNotifyPercent = -2
 
@@ -97,6 +98,8 @@ class SyncService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        progressOverlay?.hide()
+        progressOverlay = null
         releaseWakeLock()
         super.onDestroy()
     }
@@ -168,6 +171,11 @@ class SyncService : Service() {
     private fun begin(kind: SyncKind, title: String, detail: String) {
         _state.value = SyncState(running = true, kind = kind, percent = -1, title = title, detail = detail)
         acquireWakeLock()
+        val overlayEnabled = getSharedPreferences("gallery_mirror", MODE_PRIVATE)
+            .getBoolean("overlay_enabled", false)
+        if (overlayEnabled) {
+            progressOverlay = SyncProgressOverlay(this).also { it.show(-1) }
+        }
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -194,6 +202,7 @@ class SyncService : Service() {
                 detail = detail ?: prev.detail
             )
         _state.value = next
+        progressOverlay?.update(next.percent)
 
         val now = System.currentTimeMillis()
         val percentChanged = next.percent != lastNotifyPercent
@@ -209,6 +218,8 @@ class SyncService : Service() {
         _state.value =
             SyncState(running = false, kind = kind, finished = true, ok = ok, summary = summary)
         releaseWakeLock()
+        progressOverlay?.hide()
+        progressOverlay = null
         job = null
         // 留一条「已完成」通知，方便用户不在跟前时回来也能知道结果；点一下即消失
         val done =

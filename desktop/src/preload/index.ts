@@ -3,6 +3,7 @@ import type { DragPrepareResult, ExportQuery, GmApi, SyncProgress, TaskProgress 
 
 const api: GmApi = {
   getStatus: () => ipcRenderer.invoke('app:status'),
+  refreshPairingCode: () => ipcRenderer.invoke('app:refreshPairingCode'),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   openStickersDir: () => ipcRenderer.invoke('app:openStickersDir'),
   chooseDataDir: () => ipcRenderer.invoke('app:chooseDataDir'),

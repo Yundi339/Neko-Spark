@@ -218,7 +218,7 @@ node android\scripts\android-sdk-fetch.mjs <SDK目录> "emulators;latest"   # �
 | 同级目录不可写时 | 退回安装目录内，再不可写才退回系统用户目录 |
 | 开发模式 | `desktop/.data`（相对启动时的 cwd） |
 | 手动指定 | 设置页"更改位置"，或环境变量 `GALLERY_MIRROR_DATA` |
-| 位置记忆 | 程序目录下的 `data-location.json` |
+| 位置记忆 | 程序目录下的 `data-location.json`，并同步保存用户级位置指针，换安装目录也能继续使用原仓库 |
 
 > 数据放在安装目录外面：NSIS 升级/卸载时会清空安装目录，放里面会被一起删除。
 

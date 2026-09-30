@@ -1,5 +1,6 @@
-import { useState, type JSX } from 'react'
+import { useEffect, useState, type JSX } from 'react'
 import type { AppStatus } from '@shared/types'
+import QRCode from 'qrcode'
 import mascotStar from '../assets/stickers/mascot-star.svg'
 
 interface SettingsViewProps {
@@ -18,6 +19,43 @@ export default function SettingsView({
   onToggleDeleted
 }: SettingsViewProps): JSX.Element {
   const [pendingDir, setPendingDir] = useState('')
+  const [pairingStatus, setPairingStatus] = useState<AppStatus | null>(status)
+  const [pairingQr, setPairingQr] = useState('')
+
+  useEffect(() => setPairingStatus(status), [status])
+
+  const activeStatus = pairingStatus ?? status
+  const pairingAddress = activeStatus?.hub.addresses[0] ?? ''
+  const pairingCode = activeStatus?.hub.pairingCode ?? ''
+  const pairingLink = pairingAddress && pairingCode
+    ? (() => {
+        const link = new URL('neko-spark://pair')
+        link.searchParams.set('url', pairingAddress)
+        link.searchParams.set('fingerprint', activeStatus?.hubCertFingerprint ?? '')
+        link.searchParams.set('code', pairingCode)
+        return link.toString()
+      })()
+    : ''
+
+  useEffect(() => {
+    let alive = true
+    if (!pairingLink) {
+      setPairingQr('')
+      return () => {
+        alive = false
+      }
+    }
+    void QRCode.toDataURL(pairingLink, { width: 240, margin: 2, errorCorrectionLevel: 'M' })
+      .then((dataUrl) => {
+        if (alive) setPairingQr(dataUrl)
+      })
+      .catch(() => {
+        if (alive) setPairingQr('')
+      })
+    return () => {
+      alive = false
+    }
+  }, [pairingLink])
 
   const openDir = (): void => {
     void window.gm.openDataDir()
@@ -34,6 +72,11 @@ export default function SettingsView({
 
   const restart = (): void => {
     void window.gm.restartApp()
+  }
+
+  const refreshPairingCode = async (): Promise<void> => {
+    const next = await window.gm.refreshPairingCode()
+    setPairingStatus(next)
   }
 
   return (
@@ -68,7 +111,7 @@ export default function SettingsView({
         <div className="rows">
           <div className="row column">
             <span className="row-label">仓库目录</span>
-            <code className="code-block">{status?.dataDir || '初始化中...'}</code>
+            <code className="code-block">{activeStatus?.dataDir || '初始化中...'}</code>
           </div>
           <div className="row column">
             <span className="row-label">目录内容</span>
@@ -106,7 +149,7 @@ export default function SettingsView({
         <div className="rows">
           <div className="row column">
             <span className="row-label">贴图目录</span>
-            <code className="code-block">{status?.stickersDir || '初始化中...'}</code>
+            <code className="code-block">{activeStatus?.stickersDir || '初始化中...'}</code>
           </div>
           <div className="row column">
             <span className="row-label">说明</span>
@@ -143,7 +186,7 @@ export default function SettingsView({
         <div className="rows">
           <div className="row column">
             <span className="row-label">缓存目录</span>
-            <code className="code-block">{status?.runtimeDir || '初始化中...'}</code>
+            <code className="code-block">{activeStatus?.runtimeDir || '初始化中...'}</code>
           </div>
           <div className="row column">
             <span className="row-label">说明</span>
@@ -159,13 +202,13 @@ export default function SettingsView({
         <div className="rows">
           <div className="row">
             <span className="row-label">端口</span>
-            <span className="row-value">{status?.hub.port || '-'}</span>
+              <span className="row-value">{activeStatus?.hub.port || '-'}</span>
           </div>
           <div className="row column">
             <span className="row-label">局域网地址</span>
             <span className="row-value">
-              {status?.hub.addresses.length ? (
-                status.hub.addresses.map((addr) => (
+              {activeStatus?.hub.addresses.length ? (
+                activeStatus.hub.addresses.map((addr) => (
                   <code key={addr} className="code-inline">
                     {addr}
                   </code>
@@ -178,12 +221,12 @@ export default function SettingsView({
           <div className="row column">
             <span className="row-label">USB 方式</span>
             <code className="code-inline">
-              adb forward tcp:{status?.hub.port || 8787} tcp:{status?.hub.port || 8787}
+              adb forward tcp:{activeStatus?.hub.port || 8787} tcp:{activeStatus?.hub.port || 8787}
             </code>
           </div>
           <div className="row column">
             <span className="row-label">局域网访问密钥</span>
-            <code className="code-block">{status?.hubToken || '初始化中...'}</code>
+            <code className="code-block">{activeStatus?.hubToken || '初始化中...'}</code>
             <span className="hint">
               手机通过 WiFi 连接时，把这串密钥填入手机端；密钥只保存在本机数据目录，不会通过 Hub 接口返回。
               USB 回环连接可留空。
@@ -191,8 +234,26 @@ export default function SettingsView({
           </div>
           <div className="row column">
             <span className="row-label">HTTPS 证书指纹</span>
-            <code className="code-block">{status?.hubCertFingerprint || '初始化中...'}</code>
+            <code className="code-block">{activeStatus?.hubCertFingerprint || '初始化中...'}</code>
             <span className="hint">手机端首次连接时填写这串 SHA-256 指纹，用于固定本机自动生成的证书。</span>
+          </div>
+          <div className="row column">
+            <span className="row-label">局域网配对</span>
+            <div className="pairing-panel">
+              {pairingQr ? <img className="pairing-qr" src={pairingQr} alt="手机扫描配对二维码" /> : null}
+              <div className="pairing-details">
+                <strong className="pairing-code">{pairingCode || '初始化中...'}</strong>
+                <span className="hint">
+                  手机点“搜索电脑”后选择本机，再输入这个 6 位配对码；也可以直接扫描二维码。二维码只含地址、证书指纹和一次性配对码。
+                </span>
+                {activeStatus?.hub.pairingExpiresAt ? (
+                  <span className="hint">有效期至 {new Date(activeStatus.hub.pairingExpiresAt).toLocaleTimeString()}</span>
+                ) : null}
+                <button type="button" className="btn" onClick={() => void refreshPairingCode()}>
+                  刷新配对码
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -202,15 +263,15 @@ export default function SettingsView({
         <div className="rows">
           <div className="row">
             <span className="row-label">应用</span>
-            <span className="row-value">{status?.appName || 'Neko_Spark'}</span>
+            <span className="row-value">{activeStatus?.appName || 'Neko_Spark'}</span>
           </div>
           <div className="row">
             <span className="row-label">版本</span>
-            <span className="row-value">{status?.appVersion || '-'}</span>
+            <span className="row-value">{activeStatus?.appVersion || '-'}</span>
           </div>
           <div className="row">
             <span className="row-label">协议</span>
-            <span className="row-value">v{status?.protocolVersion ?? 1}</span>
+            <span className="row-value">v{activeStatus?.protocolVersion ?? 1}</span>
           </div>
         </div>
         <div className="about-mascot">

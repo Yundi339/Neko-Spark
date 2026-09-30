@@ -48,6 +48,8 @@ win:
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
+  # 卸载/覆盖安装不删除用户级 Electron 配置；相册仓库本身也位于安装目录之外。
+  deleteAppDataOnUninstall: false
   # ⚠️ perMachine: true = "为使用这台电脑的任何人安装"，也就是**所有用户**安装：
   #   ① 安装时不再出现"为哪位用户安装"那个选择页面（跟普通软件一样，用户要的就是这个）
   #      —— 之前是 false + allowElevation，等于"两种模式都支持"，覆盖安装时必弹那个页面，
