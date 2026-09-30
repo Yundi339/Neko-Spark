@@ -173,6 +173,9 @@ export interface HubStatus {
   host: string
   port: number
   addresses: string[]
+  /** 本地设置页显示的一次性配对码；不通过 Hub HTTP 接口返回。 */
+  pairingCode?: string
+  pairingExpiresAt?: number
   error?: string
 }
 
@@ -235,6 +238,7 @@ export interface TaskProgress {
 /** preload 暴露给渲染进程的 API */
 export interface GmApi {
   getStatus(): Promise<AppStatus>
+  refreshPairingCode(): Promise<AppStatus>
   openDataDir(): Promise<string>
   openStickersDir(): Promise<string>
   chooseDataDir(): Promise<ChooseDataDirResult>

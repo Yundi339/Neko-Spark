@@ -373,6 +373,27 @@ class HubClient(
         }
     }
 
+    data class PairResult(val token: String)
+
+    /** 用桌面端设置页显示的一次性配对码换取局域网访问密钥。 */
+    fun pair(code: String, deviceId: String, deviceName: String): PairResult {
+        val body = JSONObject()
+            .put("protocolVersion", 1)
+            .put("code", code.trim())
+            .put("device", deviceJson(deviceId, deviceName))
+            .toString()
+            .toRequestBody(jsonType)
+        val request = request("/api/v1/pair").post(body).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("配对失败 HTTP ${response.code}")
+            }
+            val token = JSONObject(response.body?.string().orEmpty()).optString("token").trim()
+            if (token.isBlank()) throw IOException("电脑端没有返回有效的配对结果")
+            return PairResult(token)
+        }
+    }
+
     companion object {
         private fun normalizeFingerprint(value: String): String =
             value.replace(Regex("[^0-9a-fA-F]"), "").uppercase()

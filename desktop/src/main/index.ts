@@ -106,6 +106,8 @@ function bundledAssetsDir(): string {
 async function bootstrap(): Promise<void> {
   try {
     paths = ensureStorage(dataDir)
+    // 把当前数据仓库登记到安装目录和用户级指针；换安装目录升级时仍能找回原库。
+    if (app.isPackaged) writeConfiguredDataDir(paths.dataDir)
     // 必须在建库/起 hub 之前播种：否则首屏拉 /background/:n 会 404，
     // 前端把 null 缓存下来，这一轮就看不到插画了（要重启才补上）。
     const seeded = seedBundledAssets(paths, bundledAssetsDir())
@@ -208,6 +210,11 @@ function installHubCertificateHandler(): void {
 
 function registerIpc(): void {
   ipcMain.handle('app:status', () => buildStatus())
+
+  ipcMain.handle('app:refreshPairingCode', () => {
+    hub?.refreshPairingCode()
+    return buildStatus()
+  })
 
   ipcMain.handle('app:openDataDir', async () => {
     const dir = paths?.dataDir ?? dataDir

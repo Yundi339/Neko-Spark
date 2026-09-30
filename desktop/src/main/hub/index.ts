@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:https'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
+import { randomInt } from 'node:crypto'
 import { pipeline } from 'node:stream/promises'
 import {
   APP_NAME,
@@ -34,6 +35,7 @@ import { ensurePreview, ensureThumbnail, processPendingThumbs } from './thumbs'
 import { purgeTrash, restoreMedia, sweepExpiredTrash, trashMedia } from './trash'
 import { HUB_TOKEN_HEADER, isLoopbackAddress, tokenMatches } from './auth'
 import type { HubTlsCredentials } from './tls'
+import { startMdns } from './mdns'
 
 const DEFAULT_PORT = 8787
 const MAX_PORT_TRIES = 20
@@ -41,6 +43,8 @@ const MAX_JSON_BODY = 64 * 1024 * 1024
 const MAX_TEXT_FIELD = 4096
 const MAX_DEVICE_ID = 256
 const MAX_ID_LIST = 5000
+const PAIRING_CODE_TTL_MS = 10 * 60 * 1000
+const PAIRING_CODE_MAX_ATTEMPTS = 8
 /** 局域网发现：手机广播这个口令，电脑回自己的地址信息 */
 export const DISCOVERY_PORT = 8788
 export const DISCOVERY_REQUEST = 'GALLERY_MIRROR_DISCOVER'
@@ -61,7 +65,24 @@ export interface HubOptions {
 
 export interface HubHandle {
   status: HubStatus
+  refreshPairingCode(): void
   stop(): Promise<void>
+}
+
+interface PairingState {
+  code: string
+  expiresAt: number
+  attempts: number
+  used: boolean
+}
+
+function newPairingState(): PairingState {
+  return {
+    code: randomInt(0, 1_000_000).toString().padStart(6, '0'),
+    expiresAt: Date.now() + PAIRING_CODE_TTL_MS,
+    attempts: 0,
+    used: false
+  }
 }
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
@@ -361,6 +382,7 @@ async function cleanupStaleParts(uploadsDir: string, maxAgeMs: number): Promise<
 export async function startHub(options: HubOptions): Promise<HubHandle> {
   const startedAt = Date.now()
   const { db, paths } = options
+  let pairing = newPairingState()
   const activeUploads = new Map<string, { received: number }>()
 
   // 本次清单的元数据暂存：blob 一落盘就立刻入库，照片边传边出现（不用等整轮同步结束）
@@ -446,7 +468,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       return
     }
 
-    if (!isLoopbackAddress(req.socket.remoteAddress) && !tokenMatches(options.authToken, String(req.headers[HUB_TOKEN_HEADER] ?? ''))) {
+    // 配对是唯一允许在没有访问密钥时调用的接口。它只接受短时一次性口令，
+    // 成功后才返回 Hub token；二维码、mDNS 和普通错误响应都不会暴露 token。
+    const isPairingRequest = method === 'POST' && url.pathname === '/api/v1/pair'
+    if (!isPairingRequest && !isLoopbackAddress(req.socket.remoteAddress) && !tokenMatches(options.authToken, String(req.headers[HUB_TOKEN_HEADER] ?? ''))) {
       res.setHeader('WWW-Authenticate', 'GalleryMirror token')
       sendJson(res, 401, { error: 'unauthorized' })
       return
@@ -465,6 +490,34 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
     })
 
     async function handleRoute(): Promise<void> {
+      // POST /api/v1/pair —— 手机首次配对，配对码只允许成功一次
+      if (isPairingRequest) {
+        if (pairing.used || pairing.expiresAt <= Date.now()) {
+          sendJson(res, 410, { error: 'pairing_code_expired' })
+          return
+        }
+        if (pairing.attempts >= PAIRING_CODE_MAX_ATTEMPTS) {
+          sendJson(res, 429, { error: 'pairing_code_locked' })
+          return
+        }
+        const body = await readJsonBody<{ code?: unknown; device?: unknown }>(req)
+        const code = typeof body?.code === 'string' ? body.code.trim() : ''
+        pairing.attempts += 1
+        if (!/^\d{6}$/.test(code) || code !== pairing.code) {
+          sendJson(res, 401, { error: 'invalid_pairing_code' })
+          return
+        }
+        pairing.used = true
+        // 立刻轮换设置页上的码，避免截图/旧二维码继续可用。
+        const next = newPairingState()
+        pairing = next
+        status.pairingCode = next.code
+        status.pairingExpiresAt = next.expiresAt
+        options.onDataChanged?.()
+        sendJson(res, 200, { ok: true, token: options.authToken })
+        return
+      }
+
       // GET /api/v1/health
       if (method === 'GET' && url.pathname === '/api/v1/health') {
         sendJson(res, 200, {
@@ -1229,18 +1282,31 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
     running: true,
     host: '0.0.0.0',
     port,
-    addresses: lanAddresses(port)
+    addresses: lanAddresses(port),
+    pairingCode: pairing.code,
+    pairingExpiresAt: pairing.expiresAt
   }
   const stopDiscovery = startDiscovery(options.version, () => status.port, options.tls.fingerprint)
+  const stopMdns = startMdns({
+    port,
+    version: options.version,
+    fingerprint: options.tls.fingerprint
+  })
 
   return {
     status,
+    refreshPairingCode: () => {
+      pairing = newPairingState()
+      status.pairingCode = pairing.code
+      status.pairingExpiresAt = pairing.expiresAt
+    },
     stop: () =>
       new Promise<void>((resolve) => {
         clearPrepareTimer()
         clearThumbBackfillTimer()
         clearInterval(trashSweepTimer)
         stopDiscovery()
+        stopMdns()
         server.close(() => resolve())
       })
   }

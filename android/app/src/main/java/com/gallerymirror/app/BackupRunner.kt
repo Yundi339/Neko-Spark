@@ -59,10 +59,19 @@ class BackupRunner(private val context: Context) {
         client.syncPrepare(deviceId, deviceName, entries.size, totalBytes, 0, 0)
         onLog("计算文件指纹（首次较慢，之后会走缓存）...")
         val hashed = ArrayList<Pair<MediaEntry, String>>(entries.size)
+        var unreadable = 0
         var hashedBytes = 0L
         var lastPing = System.currentTimeMillis()
         entries.forEachIndexed { index, entry ->
-            hashed.add(entry to sha256Of(entry))
+            val sha = sha256Of(entry)
+            if (sha.isBlank()) {
+                // MediaStore 可能保留云端占位项或权限已失效的条目；不能把空 SHA 发给电脑端，
+                // 否则整份清单会被服务端按无效媒体拒绝，导致其它可读文件也无法备份。
+                unreadable += 1
+                onLog("跳过无法读取的文件：${entry.displayName}")
+            } else {
+                hashed.add(entry to sha)
+            }
             hashedBytes += entry.size
             onProgress(index + 1, entries.size, entry.displayName, hashedBytes, totalBytes)
             // 准备进度最多每 2 秒上报一次：够电脑端看，又不至于刷爆网络和界面
@@ -73,6 +82,12 @@ class BackupRunner(private val context: Context) {
             }
         }
         onLog("指纹计算完成")
+
+        if (hashed.isEmpty()) {
+            onLog("没有可读取的媒体文件（跳过 $unreadable 项）")
+            return@withContext Result(entries.size, 0, 0, 0, "没有可读取的媒体文件")
+        }
+        if (unreadable > 0) onLog("已跳过 $unreadable 个无法读取的媒体文件，其余继续备份")
 
         val manifest = withRetry(onLog, "上报清单") { client.manifest(deviceId, deviceName, hashed) }
         val needed = manifest.needed
