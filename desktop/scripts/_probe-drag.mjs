@@ -54,7 +54,7 @@ async function evaluate(expression) {
 
 const hubAlive = async () => {
   try {
-    const res = await fetch(`http://127.0.0.1:${HUB_PORT}/api/v1/health`, {
+    const res = await fetch(`https://127.0.0.1:${HUB_PORT}/api/v1/health`, {
       signal: AbortSignal.timeout(1500)
     })
     return res.ok

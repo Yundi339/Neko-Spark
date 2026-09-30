@@ -1,11 +1,23 @@
 # GalleryMirror 备份协议 v1
 
-手机端（Android）通过本协议把相册清单和原始文件同步到电脑端 Hub。WiFi 与 USB 使用同一套 HTTP 协议：
+手机端（Android）通过本协议把相册清单和原始文件同步到电脑端 Hub。WiFi 与 USB 使用同一套 HTTPS 协议：
 
-- WiFi：手机直接访问电脑的局域网地址，如 `http://192.168.1.5:8787`
-- USB：电脑执行 `adb forward tcp:8787 tcp:8787`，手机访问 `http://127.0.0.1:8787`
+- WiFi：手机直接访问电脑的局域网地址，如 `https://192.168.x.x:8787`
+- USB：电脑执行 `adb forward tcp:8787 tcp:8787`，手机访问 `https://127.0.0.1:8787`
 
 默认端口 `8787`，被占用时电脑端会自动往后找空闲端口，实际端口在软件界面显示。
+
+## 0. 安全与认证
+
+Hub 强制使用 HTTPS。所有 Android 请求还必须使用桌面端设置页显示的证书指纹固定连接；非回环请求另外必须带访问密钥：
+
+```http
+X-Gallery-Mirror-Token: <局域网访问密钥>
+```
+
+桌面端本机回环请求（`127.0.0.1` / `::1`）可不带密钥；USB 回环转发可不带密钥但仍需证书指纹；WiFi、模拟器宿主机地址以及其他局域网地址必须带密钥和证书指纹。局域网发现 UDP 响应只携带地址、版本和证书指纹，不携带密钥。认证失败返回 `401`。
+
+密钥只保存在电脑端数据目录的 `hub-token` 文件中，手机端应通过设置页手动填写。不要把密钥写进源码、日志、Issue、PR 或上传附件。
 
 > 状态：本文档中标注 ✅ 的接口已在电脑端实现并通过端到端测试（`tools/mock-phone`）。
 
@@ -47,7 +59,6 @@ GET /api/v1/health
   "name": "相册镜像 GalleryMirror",
   "version": "0.1.0",
   "protocolVersion": 1,
-  "pid": 12345,
   "uptimeMs": 8123,
   "time": "2026-09-12T10:00:00.000Z"
 }
@@ -61,8 +72,6 @@ GET /api/v1/info
 
 ```json
 {
-  "dataDir": "D:\\...\\GalleryMirrorData",
-  "dbPath": "D:\\...\\GalleryMirrorData\\manifest.db",
   "counts": { "devices": 1, "albums": 42, "media": 15320, "blobs": 14987 }
 }
 ```

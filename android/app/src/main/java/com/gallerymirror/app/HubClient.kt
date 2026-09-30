@@ -12,23 +12,63 @@ import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URI
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 import java.util.concurrent.TimeUnit
 
 /** 协议 v1 客户端：与电脑端 Hub 通信 */
-class HubClient(private val baseUrl: String) {
+class HubClient(
+    baseUrl: String,
+    private val accessToken: String = "",
+    certificateFingerprint: String = ""
+) {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
-        .build()
+    private val normalizedBaseUrl = validateBaseUrl(baseUrl)
+    private val pinnedFingerprint = normalizeFingerprint(certificateFingerprint)
+
+    private val client = buildClient()
 
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    private fun url(path: String) = baseUrl.trimEnd('/') + path
+    private fun url(path: String) = normalizedBaseUrl + path
+
+    private fun request(path: String): Request.Builder = Request.Builder()
+        .url(url(path))
+        .apply {
+            if (accessToken.isNotBlank()) header("X-Gallery-Mirror-Token", accessToken.trim())
+        }
+
+    private fun requestAbsolute(rawUrl: String): Request.Builder = Request.Builder()
+        .url(rawUrl)
+        .apply {
+            if (accessToken.isNotBlank()) header("X-Gallery-Mirror-Token", accessToken.trim())
+        }
+
+    private fun buildClient(): OkHttpClient {
+        if (pinnedFingerprint.length != 64) {
+            throw IllegalArgumentException("请填写电脑端 HTTPS 证书 SHA-256 指纹")
+        }
+        val trustManager = PinnedTrustManager(pinnedFingerprint)
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf<X509TrustManager>(trustManager), SecureRandom())
+        val hostnameVerifier = HostnameVerifier { _, _ -> true }
+        return OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .hostnameVerifier(hostnameVerifier)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .build()
+    }
 
     fun health(): String {
-        val request = Request.Builder().url(url("/api/v1/health")).build()
+        val request = request("/api/v1/health").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
             return response.body?.string().orEmpty()
@@ -79,7 +119,7 @@ class HubClient(private val baseUrl: String) {
             .toString()
             .toRequestBody(jsonType)
 
-        val request = Request.Builder().url(url("/api/v1/manifest")).post(body).build()
+        val request = request("/api/v1/manifest").post(body).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("manifest HTTP ${response.code}")
             val json = JSONObject(response.body?.string().orEmpty())
@@ -119,12 +159,12 @@ class HubClient(private val baseUrl: String) {
             .put("hashedBytes", hashedBytes)
             .toString()
             .toRequestBody(jsonType)
-        val request = Request.Builder().url(url("/api/v1/sync/prepare")).post(body).build()
+        val request = request("/api/v1/sync/prepare").post(body).build()
         runCatching { client.newCall(request).execute().use { it.body?.string() } }
     }
 
     fun uploadStatus(sha256: String): Long {
-        val request = Request.Builder().url(url("/api/v1/upload-status?sha256=$sha256")).build()
+        val request = request("/api/v1/upload-status?sha256=$sha256").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return 0L
             val json = JSONObject(response.body?.string().orEmpty())
@@ -147,8 +187,7 @@ class HubClient(private val baseUrl: String) {
         while (offset < entry.size) {
             val length = minOf(chunkSize, entry.size - offset)
             val requestBody = RangeRequestBody(resolver, entry.uri, entry.mimeType, offset, length)
-            val request = Request.Builder()
-                .url(url("/api/v1/blob/$sha256"))
+            val request = request("/api/v1/blob/$sha256")
                 .header("Content-Range", "bytes $offset-${offset + length - 1}/${entry.size}")
                 .put(requestBody)
                 .build()
@@ -172,7 +211,7 @@ class HubClient(private val baseUrl: String) {
             .toString()
             .toRequestBody(jsonType)
 
-        val request = Request.Builder().url(url("/api/v1/commit")).post(body).build()
+        val request = request("/api/v1/commit").post(body).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("commit HTTP ${response.code}")
             return response.body?.string().orEmpty()
@@ -183,7 +222,7 @@ class HubClient(private val baseUrl: String) {
     data class DeviceSummary(val id: String, val name: String, val mediaCount: Int)
 
     fun devices(): List<DeviceSummary> {
-        val request = Request.Builder().url(url("/api/v1/devices")).build()
+        val request = request("/api/v1/devices").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return emptyList()
             val json = JSONObject(response.body?.string().orEmpty())
@@ -221,7 +260,7 @@ class HubClient(private val baseUrl: String) {
     /** 拉取电脑端媒体列表（deviceId 会包含其副设备） */
     fun media(deviceId: String?): List<RemoteMedia> {
         val suffix = if (deviceId.isNullOrBlank()) "" else "?deviceId=${Uri.encode(deviceId)}"
-        val request = Request.Builder().url(url("/api/v1/media$suffix")).build()
+        val request = request("/api/v1/media$suffix").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("media HTTP ${response.code}")
             val json = JSONObject(response.body?.string().orEmpty())
@@ -251,7 +290,7 @@ class HubClient(private val baseUrl: String) {
 
     /** 流式下载原始文件到输出流（恢复回手机用） */
     fun download(mediaId: Long, output: java.io.OutputStream, onBytes: (Long) -> Unit) {
-        val request = Request.Builder().url(url("/api/v1/file/$mediaId")).build()
+        val request = request("/api/v1/file/$mediaId").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("下载失败 HTTP ${response.code}")
             val body = response.body ?: throw IOException("响应为空")
@@ -271,7 +310,7 @@ class HubClient(private val baseUrl: String) {
     /** 修改电脑端上的设备显示名 */
     fun renameDevice(deviceId: String, name: String) {
         val body = JSONObject().put("deviceId", deviceId).put("name", name).toString().toRequestBody(jsonType)
-        val request = Request.Builder().url(url("/api/v1/device/rename")).post(body).build()
+        val request = request("/api/v1/device/rename").post(body).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("rename HTTP ${response.code}")
         }
@@ -279,21 +318,21 @@ class HubClient(private val baseUrl: String) {
 
     /** 电脑端设置里的本地贴图列表（用于让手机端和电脑端用同一套图） */
     fun stickerUrls(): List<String> {
-        val request = Request.Builder().url(url("/api/v1/stickers")).build()
+        val request = request("/api/v1/stickers").build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return emptyList()
             val json = JSONObject(response.body?.string().orEmpty())
             val array = json.optJSONArray("stickers") ?: return emptyList()
             val result = ArrayList<String>(array.length())
             for (i in 0 until array.length()) {
-                result.add(url("/api/v1/sticker/${array.getString(i)}"))
+                result.add(url("/api/v1/sticker/${Uri.encode(array.getString(i))}"))
             }
             return result
         }
     }
 
     fun fetchBitmap(imageUrl: String): android.graphics.Bitmap? {
-        val request = Request.Builder().url(imageUrl).build()
+        val request = requestAbsolute(imageUrl).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
             return android.graphics.BitmapFactory.decodeStream(response.body?.byteStream())
@@ -331,6 +370,52 @@ class HubClient(private val baseUrl: String) {
                     remaining -= read
                 }
             }
+        }
+    }
+
+    companion object {
+        private fun normalizeFingerprint(value: String): String =
+            value.replace(Regex("[^0-9a-fA-F]"), "").uppercase()
+
+        private class PinnedTrustManager(private val expected: String) : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>, authType: String) = Unit
+
+            override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String) {
+                val leaf = chain.firstOrNull() ?: throw CertificateException("电脑端没有提供证书")
+                val actual = MessageDigest.getInstance("SHA-256")
+                    .digest(leaf.encoded)
+                    .joinToString("") { "%02X".format(it) }
+                if (!MessageDigest.isEqual(actual.toByteArray(), expected.toByteArray())) {
+                    throw CertificateException("电脑端 HTTPS 证书指纹不匹配")
+                }
+            }
+
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+
+        private fun validateBaseUrl(raw: String): String {
+            val value = raw.trim().trimEnd('/')
+            val parsed = runCatching { URI(value) }.getOrNull()
+                ?: throw IllegalArgumentException("电脑端地址格式不正确")
+            val scheme = parsed.scheme?.lowercase()
+            val host = parsed.host?.lowercase()
+            if (scheme != "https" || host.isNullOrBlank() || parsed.userInfo != null) {
+                throw IllegalArgumentException("电脑端地址必须是 HTTPS 地址，且不能包含账号密码")
+            }
+            if (!isPrivateOrLocalHost(host)) {
+                throw IllegalArgumentException("电脑端地址必须是本机或局域网地址")
+            }
+            return value
+        }
+
+        private fun isPrivateOrLocalHost(host: String): Boolean {
+            if (host == "localhost" || host.endsWith(".local") || host == "::1" || host == "[::1]" || host.startsWith("fe80:")) return true
+            val parts = host.split('.')
+            if (parts.size != 4 || parts.any { it.toIntOrNull() !in 0..255 }) return false
+            val first = parts[0].toInt()
+            val second = parts[1].toInt()
+            return first == 127 || first == 10 || (first == 192 && second == 168) ||
+                (first == 172 && second in 16..31)
         }
     }
 }

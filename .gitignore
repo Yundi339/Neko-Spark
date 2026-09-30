@@ -23,6 +23,12 @@ release/
 !/GalleryMirrorData/nekoha-originals/
 
 # 本地私有内容（只在自己电脑上，绝不进公开仓库）
+# Codex 本地技能工作文档与任务记录，永远不提交、不上传
+.codex/
+# Hub 局域网访问密钥（即使数据目录被配置到仓库内，也不能进 Git）
+**/hub-token
+**/hub-cert.pem
+**/hub-key.pem
 # .archive/ 存的是开发过程存档（含本机路径、局域网 IP、私人对话记录）
 # CLAUDE.md 是给接任 AI 的交接文件，含同样的本机信息与用户偏好
 .archive/
@@ -40,6 +46,8 @@ android/local.properties
 android/.idea/
 *.apk
 *.aab
+*.jks
+*.keystore
 
 # 编辑器 / 系统
 .idea/

@@ -19,7 +19,7 @@ mkdirSync(SCRATCH_DIR, { recursive: true })
 
 
 const port = Number(process.argv[2] || 8787)
-const base = `http://127.0.0.1:${port}/api/v1`
+const base = `https://127.0.0.1:${port}/api/v1`
 
 const sourcePath = join(import.meta.dirname, '..', 'src', 'renderer', 'src', 'utils', 'mediaInfo.ts')
 const patched = readFileSync(sourcePath, 'utf8').replace(

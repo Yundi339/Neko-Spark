@@ -147,7 +147,7 @@ try {
   )
   console.log('导入:', JSON.stringify(imported))
 
-  const base = `http://127.0.0.1:${HUB_PORT}/api/v1`
+  const base = `https://127.0.0.1:${HUB_PORT}/api/v1`
   const video = (await (await fetch(`${base}/media?kind=video`)).json()).media[0]
   console.log('视频记录:', video.id, video.displayName, `${video.width}×${video.height}`, `${(video.durationMs / 1000).toFixed(1)}s`)
 
@@ -184,7 +184,7 @@ try {
   // 诊断 1：页面里直接做一次带 Range 的 fetch（帧率那段代码就是这么读文件的）
   const rangeTest = await evaluate(`(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:${HUB_PORT}/api/v1/file/${video.id}', { headers: { Range: 'bytes=0-99' } });
+      const res = await fetch('https://127.0.0.1:${HUB_PORT}/api/v1/file/${video.id}', { headers: { Range: 'bytes=0-99' } });
       const buf = await res.arrayBuffer();
       return JSON.stringify({ ok: res.ok, status: res.status, bytes: buf.byteLength });
     } catch (err) {

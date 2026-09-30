@@ -1,6 +1,6 @@
 # 电脑端架构说明
 
-电脑端是一个 **Electron 应用**，同时充当整个系统的 **Hub**：对外提供 HTTP 服务与协议 v1 接口，
+电脑端是一个 **Electron 应用**，同时充当整个系统的 **Hub**：对外提供 HTTPS 服务与协议 v1 接口，
 对内管理内容寻址仓库、SQLite 元数据库与缩略图缓存；界面上是一个「像手机相册一样」的浏览器。
 
 > 手机端在 [`../android/`](../android/)；协议见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)；
@@ -34,7 +34,7 @@ NSIS 升级/卸载会清空安装目录，数据放里面会被一起删除。
 
 ```
 主进程 (src/main/index.ts)
-├─ 启动 Hub（HTTP 8787 + UDP 发现 8788）
+├─ 启动 Hub（HTTPS 8787 + UDP 发现 8788）
 ├─ 创建窗口、注册 IPC、转发 data:changed
 └─ thumb-pool（utilityProcess 子进程池）
       └─ thumb-worker.ts —— 唯一碰 sharp 的地方
@@ -60,7 +60,7 @@ src/
 │  ├─ index.ts            窗口、IPC、启动 Hub
 │  ├─ drag.ts             拖出到资源管理器（硬链接中转，见 §5）
 │  └─ hub/
-│     ├─ index.ts         HTTP 服务：协议 v1 + 媒体/缩略图/背景/贴图 + UDP 发现
+│     ├─ index.ts         HTTPS 服务：协议 v1 + 媒体/缩略图/背景/贴图 + UDP 发现
 │     ├─ db.ts            node:sqlite 封装、建表与迁移
 │     ├─ storage.ts       目录布局与内容寻址路径
 │     ├─ config.ts        数据目录解析、运行时缓存重定向

@@ -1,5 +1,6 @@
-import { copyFile, mkdir, utimes } from 'node:fs/promises'
-import { join } from 'node:path'
+import { constants } from 'node:fs'
+import { copyFile, mkdir, realpath, utimes } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { TaskProgress } from '@shared/types'
 import type { Database } from './db'
 import { blobPath } from './storage'
@@ -11,6 +12,31 @@ export interface ExportContext {
 }
 
 const PROGRESS_INTERVAL_MS = 150
+
+function safeExportName(value: string, fallback: string): string {
+  const cleaned = value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/^\.+/, '')
+    .trim()
+  return cleaned || fallback
+}
+
+function safeRelativeParts(value: string): string[] {
+  if (!value) return []
+  if (value.includes('\\') || value.startsWith('/') || /^[A-Za-z]:/.test(value)) {
+    throw new Error('invalid_relative_path')
+  }
+  const parts = value.split('/').filter(Boolean)
+  if (parts.some((part) => part === '.' || part === '..' || /[\u0000-\u001f\u007f]/.test(part))) {
+    throw new Error('invalid_relative_path')
+  }
+  return parts.map((part) => safeExportName(part, '_'))
+}
+
+function isWithin(root: string, child: string): boolean {
+  const rel = relative(root, child)
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
+}
 
 /**
  * 把仓库中的媒体导出为"和手机一致"的文件夹树：
@@ -25,6 +51,8 @@ export async function exportTo(
   const { db } = ctx
   const startedAt = Date.now()
   const rows = db.listForExport(query)
+  await mkdir(targetDir, { recursive: true })
+  const targetRoot = await realpath(resolve(targetDir))
 
   const progress: TaskProgress = {
     taskId,
@@ -57,14 +85,18 @@ export async function exportTo(
 
   for (const row of rows) {
     try {
-      const deviceName = prefixByDevice ? deviceNames.get(row.deviceId) ?? row.deviceId : ''
+      const deviceName = prefixByDevice
+        ? safeExportName(deviceNames.get(row.deviceId) ?? row.deviceId, '设备')
+        : ''
       const baseDir = deviceName ? join(targetDir, deviceName) : targetDir
-      const relativeParts = row.relativePath.split('/').filter(Boolean)
-      const destDir = join(baseDir, ...relativeParts)
-      const destFile = join(destDir, row.displayName)
+      const destDir = join(baseDir, ...safeRelativeParts(row.relativePath))
+      const destFile = join(destDir, safeExportName(row.displayName, '未命名文件'))
 
       await mkdir(destDir, { recursive: true })
-      await copyFile(blobPath(ctx.blobsDir, row.blobSha256), destFile)
+      const realDestDir = await realpath(destDir)
+      if (!isWithin(targetRoot, realDestDir)) throw new Error('invalid_export_target')
+      // 导出不能静默覆盖用户目标目录里已有的文件；重复导出由上层显示为失败，用户可选择空目录重试。
+      await copyFile(blobPath(ctx.blobsDir, row.blobSha256), destFile, constants.COPYFILE_EXCL)
 
       const mtime = row.dateModified ?? row.dateTaken
       if (mtime && mtime > 0) {

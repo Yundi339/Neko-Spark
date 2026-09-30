@@ -49,6 +49,6 @@ const result = await ev(
 )
 console.log('导入结果:', result)
 await sleep(1500)
-const info = await (await fetch(`http://127.0.0.1:${Number(process.env.HUB_PORT ?? 8809)}/api/v1/info`)).json()
+const info = await (await fetch(`https://127.0.0.1:${Number(process.env.HUB_PORT ?? 8809)}/api/v1/info`)).json()
 console.log('电脑端统计:', JSON.stringify(info.counts))
 process.exit(0)

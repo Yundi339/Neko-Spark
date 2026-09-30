@@ -1,7 +1,8 @@
 import { createReadStream, existsSync } from 'node:fs'
 import { createSocket, type Socket as UdpSocket } from 'node:dgram'
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, type Server } from 'node:https'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -31,10 +32,15 @@ import { hashFile } from './importer'
 import { detectKind, guessMime } from './media'
 import { ensurePreview, ensureThumbnail, processPendingThumbs } from './thumbs'
 import { purgeTrash, restoreMedia, sweepExpiredTrash, trashMedia } from './trash'
+import { HUB_TOKEN_HEADER, isLoopbackAddress, tokenMatches } from './auth'
+import type { HubTlsCredentials } from './tls'
 
 const DEFAULT_PORT = 8787
 const MAX_PORT_TRIES = 20
-const MAX_JSON_BODY = 512 * 1024 * 1024
+const MAX_JSON_BODY = 64 * 1024 * 1024
+const MAX_TEXT_FIELD = 4096
+const MAX_DEVICE_ID = 256
+const MAX_ID_LIST = 5000
 /** 局域网发现：手机广播这个口令，电脑回自己的地址信息 */
 export const DISCOVERY_PORT = 8788
 export const DISCOVERY_REQUEST = 'GALLERY_MIRROR_DISCOVER'
@@ -43,6 +49,8 @@ export interface HubOptions {
   db: Database
   paths: StoragePaths
   version: string
+  authToken: string
+  tls: HubTlsCredentials
   port?: number
   onDataChanged?: () => void
   onTaskProgress?: (progress: TaskProgress) => void
@@ -91,7 +99,7 @@ function lanAddresses(port: number): string[] {
   }
   const real = candidates.filter((item) => item.score > 0)
   const usable = real.length > 0 ? real : candidates
-  return usable.sort((a, b) => b.score - a.score).map((item) => `http://${item.address}:${port}`)
+  return usable.sort((a, b) => b.score - a.score).map((item) => `https://${item.address}:${port}`)
 }
 
 function listen(server: Server, port: number): Promise<number> {
@@ -126,9 +134,18 @@ function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
+    let rejected = false
+    const declared = Number(req.headers['content-length'] ?? '')
+    if (Number.isSafeInteger(declared) && declared > MAX_JSON_BODY) {
+      reject(new Error('request_too_large'))
+      req.destroy()
+      return
+    }
     req.on('data', (chunk: Buffer) => {
+      if (rejected) return
       size += chunk.length
       if (size > MAX_JSON_BODY) {
+        rejected = true
         reject(new Error('请求体过大'))
         req.destroy()
         return
@@ -137,13 +154,94 @@ function readJsonBody<T>(req: IncomingMessage): Promise<T> {
     })
     req.on('error', reject)
     req.on('end', () => {
+      if (rejected) return
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')) as T)
-      } catch (err) {
-        reject(err)
+      } catch {
+        reject(new Error('invalid_json'))
       }
     })
   })
+}
+
+function isSafeText(value: unknown, max = MAX_TEXT_FIELD, allowEmpty = true): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= max &&
+    (allowEmpty || value.length > 0) &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  )
+}
+
+function isSafeRelativePath(value: unknown): value is string {
+  if (!isSafeText(value)) return false
+  if (value.length === 0) return true
+  if (value.includes('\\') || value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
+  const parts = value.split('/')
+  // MediaStore 的 RELATIVE_PATH 和协议中的相册目录通常以一个 `/` 结尾；
+  // 只去掉这个目录标记，仍拒绝中间空段、绝对路径和 `.`/`..`。
+  if (parts.at(-1) === '') parts.pop()
+  return parts.length > 0 && parts.every((part) => part.length > 0 && part !== '.' && part !== '..')
+}
+
+function isSafeFileName(value: unknown): value is string {
+  return (
+    isSafeText(value, 255, false) &&
+    value !== '.' &&
+    value !== '..' &&
+    !value.includes('/') &&
+    !value.includes('\\')
+  )
+}
+
+function isValidDevice(device: unknown): boolean {
+  if (!device || typeof device !== 'object') return false
+  const value = device as { deviceId?: unknown; name?: unknown; model?: unknown; androidVersion?: unknown }
+  return (
+    isSafeText(value.deviceId, MAX_DEVICE_ID, false) &&
+    isSafeText(value.name, 255, false) &&
+    (value.model === undefined || isSafeText(value.model, 255)) &&
+    (value.androidVersion === undefined || isSafeText(value.androidVersion, 64))
+  )
+}
+
+function isValidMediaItem(item: unknown): item is MediaItem {
+  if (!item || typeof item !== 'object') return false
+  const value = item as MediaItem
+  return (
+    /^[0-9a-f]{64}$/.test(value.sha256) &&
+    isSafeFileName(value.displayName) &&
+    isSafeRelativePath(value.relativePath) &&
+    Number.isSafeInteger(value.size) &&
+    value.size >= 0 &&
+    (value.bucketId === undefined || isSafeText(value.bucketId)) &&
+    (value.bucketName === undefined || isSafeText(value.bucketName, 255)) &&
+    (value.mimeType === undefined || isSafeText(value.mimeType, 255))
+  )
+}
+
+function isSafeMediaIdentity(item: unknown): item is MediaItem {
+  if (!item || typeof item !== 'object') return false
+  const value = item as MediaItem
+  return /^[0-9a-f]{64}$/.test(value.sha256) && isSafeFileName(value.displayName) && isSafeRelativePath(value.relativePath)
+}
+
+function parseIds(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ID_LIST) return []
+  return [...new Set(value.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+}
+
+function isTrustedOrigin(origin: string): boolean {
+  if (origin === 'null' || origin === 'file://') return true
+  try {
+    const parsed = new URL(origin)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      ['localhost', '127.0.0.1', '[::1]', '::1'].includes(parsed.hostname)
+    )
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -152,7 +250,7 @@ function readJsonBody<T>(req: IncomingMessage): Promise<T> {
  * 这种情况不能让它 500 —— 跳过流式入库，交给 commit 兜底即可。
  */
 function canIngestItem(item: MediaItem): boolean {
-  return Boolean(item.sha256) && Boolean(item.displayName) && Number.isFinite(item.size)
+  return isValidMediaItem(item)
 }
 
 function mediaItemToInput(deviceId: string, item: MediaItem): NewMediaInput {
@@ -183,7 +281,7 @@ function mediaItemToInput(deviceId: string, item: MediaItem): NewMediaInput {
 }
 
 /** 启动局域网发现应答（手机端"搜索电脑"用的） */
-function startDiscovery(version: string, getPort: () => number): () => void {
+function startDiscovery(version: string, getPort: () => number, fingerprint: string): () => void {
   let socket: UdpSocket | null = null
   try {
     socket = createSocket({ type: 'udp4', reuseAddr: true })
@@ -201,6 +299,8 @@ function startDiscovery(version: string, getPort: () => number): () => void {
         name: APP_NAME,
         version,
         port: getPort(),
+        protocol: 'https',
+        fingerprint,
         protocolVersion: PROTOCOL_VERSION
       })
       try {
@@ -320,15 +420,24 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
     }
   }
 
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+  const server = createServer({ key: options.tls.key, cert: options.tls.cert }, (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const segments = url.pathname.split('/').filter(Boolean)
     const method = req.method ?? 'GET'
+    const origin = req.headers.origin
 
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    if (origin && !isTrustedOrigin(origin)) {
+      sendJson(res, 403, { error: 'origin_not_allowed' })
+      return
+    }
+
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+    }
     // ⚠️ 必须带上 Range：渲染端读视频 moov 盒子算帧率时会带 Range 头去 fetch，
     //    不带 Range 的话预检失败，浏览器直接拦掉请求（帧率就永远取不到）
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Content-Range, Range')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Content-Range, Range, X-Gallery-Mirror-Token')
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS, HEAD')
     if (method === 'OPTIONS') {
@@ -337,9 +446,21 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       return
     }
 
+    if (!isLoopbackAddress(req.socket.remoteAddress) && !tokenMatches(options.authToken, String(req.headers[HUB_TOKEN_HEADER] ?? ''))) {
+      res.setHeader('WWW-Authenticate', 'GalleryMirror token')
+      sendJson(res, 401, { error: 'unauthorized' })
+      return
+    }
+
     void handleRoute().catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err)
-      if (!res.headersSent) sendJson(res, 500, { error: 'internal_error', message })
+      console.error('[hub] 请求失败:', message)
+      if (!res.headersSent) {
+        const status = message === 'request_too_large' || message === '请求体过大' ? 413 : message === 'invalid_json' ? 400 : 500
+        sendJson(res, status, {
+          error: status === 400 ? 'invalid_json' : status === 413 ? 'request_too_large' : 'internal_error'
+        })
+      }
       else res.end()
     })
 
@@ -350,7 +471,6 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           name: APP_NAME,
           version: options.version,
           protocolVersion: PROTOCOL_VERSION,
-          pid: process.pid,
           uptimeMs: Date.now() - startedAt,
           time: new Date().toISOString()
         })
@@ -360,8 +480,6 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // GET /api/v1/info
       if (method === 'GET' && url.pathname === '/api/v1/info') {
         sendJson(res, 200, {
-          dataDir: paths.dataDir,
-          dbPath: paths.dbPath,
           counts: db.counts(),
           sourceDeleted: db.countSourceDeleted()
         })
@@ -613,9 +731,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/device/merge —— 合并设备（可逆：source 作为副设备挂到 target 下）
       if (method === 'POST' && url.pathname === '/api/v1/device/merge') {
         const body = await readJsonBody<{ sourceDeviceId?: string; targetDeviceId?: string }>(req)
-        const sourceId = body?.sourceDeviceId?.trim()
-        const targetId = body?.targetDeviceId?.trim()
-        if (!sourceId || !targetId) {
+        const sourceId = typeof body?.sourceDeviceId === 'string' ? body.sourceDeviceId.trim() : ''
+        const targetId = typeof body?.targetDeviceId === 'string' ? body.targetDeviceId.trim() : ''
+        if (!isSafeText(sourceId, MAX_DEVICE_ID, false) || !isSafeText(targetId, MAX_DEVICE_ID, false)) {
           sendJson(res, 400, { error: 'missing_params' })
           return
         }
@@ -632,8 +750,8 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/device/split —— 分离设备（恢复独立）
       if (method === 'POST' && url.pathname === '/api/v1/device/split') {
         const body = await readJsonBody<{ deviceId?: string }>(req)
-        const deviceId = body?.deviceId?.trim()
-        if (!deviceId) {
+        const deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : ''
+        if (!isSafeText(deviceId, MAX_DEVICE_ID, false)) {
           sendJson(res, 400, { error: 'missing_params' })
           return
         }
@@ -646,9 +764,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/device/rename —— 手机端/电脑端都可以改设备名
       if (method === 'POST' && url.pathname === '/api/v1/device/rename') {
         const body = await readJsonBody<{ deviceId?: string; name?: string }>(req)
-        const deviceId = body?.deviceId?.trim()
-        const name = body?.name?.trim()
-        if (!deviceId || !name) {
+        const deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : ''
+        const name = typeof body?.name === 'string' ? body.name.trim() : ''
+        if (!isSafeText(deviceId, MAX_DEVICE_ID, false) || !isSafeText(name, 255, false)) {
           sendJson(res, 400, { error: 'missing_params' })
           return
         }
@@ -661,7 +779,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/favorite
       if (method === 'POST' && url.pathname === '/api/v1/favorite') {
         const body = await readJsonBody<{ id?: number; favorite?: boolean }>(req)
-        if (!body?.id) {
+        if (!Number.isSafeInteger(body?.id) || Number(body.id) <= 0) {
           sendJson(res, 400, { error: 'missing_id' })
           return
         }
@@ -685,7 +803,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/media/trash —— 移入回收站（软删除，不删文件）
       if (method === 'POST' && url.pathname === '/api/v1/media/trash') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
-        const ids = (body?.ids ?? []).map(Number).filter((id) => Number.isFinite(id))
+        const ids = parseIds(body?.ids)
         if (ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
@@ -699,7 +817,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/media/restore —— 从回收站恢复（放回原来的相册位置）
       if (method === 'POST' && url.pathname === '/api/v1/media/restore') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
-        const ids = (body?.ids ?? []).map(Number).filter((id) => Number.isFinite(id))
+        const ids = parseIds(body?.ids)
         if (ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
@@ -713,7 +831,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/media/purge —— 彻底删除（记录 + 磁盘文件）
       if (method === 'POST' && url.pathname === '/api/v1/media/purge') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
-        const ids = (body?.ids ?? []).map(Number).filter((id) => Number.isFinite(id))
+        const ids = parseIds(body?.ids)
         if (ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
@@ -727,6 +845,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // GET /api/v1/upload-status?sha256=
       if (method === 'GET' && url.pathname === '/api/v1/upload-status') {
         const sha = url.searchParams.get('sha256') ?? ''
+        if (!/^[0-9a-f]{64}$/.test(sha)) {
+          sendJson(res, 400, { error: 'invalid_sha256' })
+          return
+        }
         const exists = db.blobExists(sha)
         let received = activeUploads.get(sha)?.received ?? 0
         if (!exists) {
@@ -761,32 +883,89 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         const rangeHeader = req.headers['content-range']
         let offset = 0
         let total = 0
+        let expectedChunkLength = 0
+        const rawLength = req.headers['content-length']
+        const contentLength = typeof rawLength === 'string' && /^\d+$/.test(rawLength) ? Number(rawLength) : undefined
+        if (contentLength !== undefined && !Number.isSafeInteger(contentLength)) {
+          sendJson(res, 413, { error: 'invalid_content_length' })
+          return
+        }
         if (typeof rangeHeader === 'string') {
-          const match = /bytes\s+(\d+)-(\d+)\/(\d+)/.exec(rangeHeader)
-          if (match) {
-            offset = Number(match[1])
-            total = Number(match[3])
+          const match = /^bytes\s+(\d+)-(\d+)\/(\d+)$/.exec(rangeHeader.trim())
+          if (!match) {
+            sendJson(res, 400, { error: 'invalid_content_range' })
+            return
+          }
+          const start = Number(match[1])
+          const end = Number(match[2])
+          offset = start
+          total = Number(match[3])
+          expectedChunkLength = end - start + 1
+          if (
+            !Number.isSafeInteger(start) ||
+            !Number.isSafeInteger(end) ||
+            !Number.isSafeInteger(total) ||
+            start < 0 ||
+            end < start ||
+            total <= end ||
+            !Number.isSafeInteger(expectedChunkLength) ||
+            (contentLength !== undefined && contentLength !== expectedChunkLength)
+          ) {
+            sendJson(res, 400, { error: 'invalid_content_range' })
+            return
           }
         } else {
-          offset = Number(url.searchParams.get('offset') ?? '0') || 0
-          total = Number(url.searchParams.get('total') ?? '0') || 0
+          offset = Number(url.searchParams.get('offset') ?? '0')
+          total = Number(url.searchParams.get('total') ?? '0')
+          if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(total) || offset < 0 || total < 0) {
+            sendJson(res, 400, { error: 'invalid_upload_range' })
+            return
+          }
+          if (contentLength !== undefined) {
+            expectedChunkLength = contentLength
+            if (total === 0) total = offset + contentLength
+          }
         }
-        if (total === 0) total = offset + Number(req.headers['content-length'] ?? '0')
+        if (total > 0 && offset + expectedChunkLength > total) {
+          sendJson(res, 400, { error: 'invalid_upload_range' })
+          return
+        }
 
         // 断点续传：如果本地没有分片文件，只能从 0 开始
-        if (offset > 0 && !existsSync(partPath)) offset = 0
+        if (offset > 0 && !existsSync(partPath)) {
+          offset = 0
+          if (expectedChunkLength > 0 && total < expectedChunkLength) {
+            sendJson(res, 400, { error: 'invalid_upload_range' })
+            return
+          }
+        }
+
+        let existingSize = 0
+        try {
+          existingSize = (await stat(partPath)).size
+        } catch {
+          existingSize = 0
+        }
+        if (offset > existingSize) {
+          sendJson(res, 409, { error: 'upload_offset_mismatch', received: existingSize })
+          return
+        }
 
         const handle = await open(partPath, offset === 0 ? 'w' : 'r+')
         try {
           await handle.truncate(offset)
-        } catch {
-          // 忽略截断失败（文件尚不存在时）
+          await pipeline(req, handle.createWriteStream({ start: offset }))
+        } finally {
+          await handle.close()
         }
-        const writeStream = handle.createWriteStream({ start: offset })
-        await pipeline(req, writeStream)
 
         const info = await stat(partPath)
         const received = info.size
+        if ((expectedChunkLength > 0 && received - offset !== expectedChunkLength) || (total > 0 && received > total)) {
+          activeUploads.delete(sha)
+          sendJson(res, 400, { error: 'invalid_upload_size' })
+          return
+        }
         activeUploads.set(sha, { received })
         if (sync && !sync.done) {
           // 传输中的字节数也实时上报，界面进度条更平滑
@@ -840,6 +1019,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         const body = await readJsonBody<SyncPrepareRequest>(req)
         const device = body?.device
         const deviceId = device?.deviceId ?? ''
+        if (!isValidDevice(device)) {
+          sendJson(res, 400, { error: 'invalid_device' })
+          return
+        }
         // 换了一台手机 / 上一轮已结束 → 开一段新的准备会话
         const isNewSession = !sync || sync.deviceId !== deviceId || sync.done
         if (isNewSession) {
@@ -885,7 +1068,11 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/manifest
       if (method === 'POST' && url.pathname === '/api/v1/manifest') {
         const body = await readJsonBody<ManifestRequest>(req)
-        const items = body.items ?? []
+        const items = body?.items ?? []
+        if (!isValidDevice(body.device) || !Array.isArray(items) || items.length > 250000 || items.some((item) => !isSafeMediaIdentity(item))) {
+          sendJson(res, 400, { error: 'invalid_manifest' })
+          return
+        }
         // 用户在电脑上删过的（墓碑）：既不要它再传、也不要它再入库 ——
         // 否则删掉的照片会在手机下次备份时原样长回来。对手机就回"这边已经有了"。
         const tombstoned = body.device?.deviceId ? db.tombstoneKeysOf(body.device.deviceId) : new Set<string>()
@@ -975,9 +1162,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/commit
       if (method === 'POST' && url.pathname === '/api/v1/commit') {
         const body = await readJsonBody<CommitRequest>(req)
-        const device = body.device
-        if (!device?.deviceId) {
-          sendJson(res, 400, { error: 'missing_device' })
+        const device = body?.device
+        if (!isValidDevice(device) || !Array.isArray(body?.items) || body.items.length > 250000 || body.items.some((item) => !isSafeMediaIdentity(item))) {
+          sendJson(res, 400, { error: 'invalid_commit' })
           return
         }
         db.upsertDevice({
@@ -1044,7 +1231,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
     port,
     addresses: lanAddresses(port)
   }
-  const stopDiscovery = startDiscovery(options.version, () => status.port)
+  const stopDiscovery = startDiscovery(options.version, () => status.port, options.tls.fingerprint)
 
   return {
     status,

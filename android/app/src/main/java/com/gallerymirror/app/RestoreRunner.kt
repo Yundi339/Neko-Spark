@@ -35,13 +35,15 @@ class RestoreRunner(private val context: Context) {
 
     suspend fun run(
         baseUrl: String,
+        accessToken: String,
+        certificateFingerprint: String,
         deviceId: String,
         mode: Mode,
         folderName: String,
         onLog: (String) -> Unit,
         onProgress: (current: Int, total: Int, label: String, bytesDone: Long, bytesTotal: Long) -> Unit
     ): Result = withContext(Dispatchers.IO) {
-        val client = HubClient(baseUrl)
+        val client = HubClient(baseUrl, accessToken, certificateFingerprint)
         // 拉列表这一下失败会让整轮恢复作废，所以断线要自动等重连。
         // 单个文件下载失败本来就只记一笔 failed 然后继续；重跑恢复时
         // "同名同大小自动跳过"会让它从断点接着来，不会重复复制。
@@ -226,13 +228,21 @@ class RestoreRunner(private val context: Context) {
     }
 
     private fun sanitizeName(name: String): String {
-        val cleaned = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().trim('.')
+        val cleaned = name
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .replace(Regex("[\\u0000-\\u001F]"), "_")
+            .trim()
+            .trim('.')
         return cleaned.ifEmpty { "未命名" }
     }
 
     /** 新文件夹名字：去掉不允许的字符；空白则用默认名 */
     private fun folderNameFor(raw: String): String {
-        val cleaned = raw.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().trim('.')
+        val cleaned = raw
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .replace(Regex("[\\u0000-\\u001F]"), "_")
+            .trim()
+            .trim('.')
         return cleaned.ifBlank { "Neko_Spark恢复" }
     }
 

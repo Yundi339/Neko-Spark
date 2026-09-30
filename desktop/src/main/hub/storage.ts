@@ -104,11 +104,13 @@ export function stickerContentType(name: string): string {
 
 /** 内容寻址路径：blobs/<sha前2位>/<sha> */
 export function blobPath(blobsDir: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('invalid_sha256')
   return join(blobsDir, sha256.slice(0, 2), sha256)
 }
 
 /** 缩略图缓存路径：thumbs/<sha前2位>/<sha>.webp */
 export function thumbPath(thumbsDir: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('invalid_sha256')
   return join(thumbsDir, sha256.slice(0, 2), `${sha256}.jpg`)
 }
 
@@ -117,6 +119,7 @@ export function thumbPath(thumbsDir: string, sha256: string): string {
  * 主进程只校验魔数、不解码；换个格式要连渲染端那道生成流程一起改，收益（422 张）也不如缩略图大。
  */
 export function videoThumbPath(thumbsDir: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('invalid_sha256')
   return join(thumbsDir, sha256.slice(0, 2), `${sha256}.webp`)
 }
 
@@ -132,5 +135,6 @@ export function videoThumbPath(thumbsDir: string, sha256: string): string {
  * 内容寻址 → 同一个 sha 永远对应同一张图，不需要失效逻辑。
  */
 export function previewPath(thumbsDir: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('invalid_sha256')
   return join(thumbsDir, sha256.slice(0, 2), `${sha256}.full.webp`)
 }

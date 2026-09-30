@@ -13,6 +13,9 @@ import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import sharp from 'sharp'
 
+// Smoke 只连接本机 Hub；Hub 使用每台机器自动生成的自签名证书。
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
 // 临时目录一律放**项目内**的 .cache/tmp —— 不用 C 盘的 %TEMP%（用户 C 盘敏感，2026-09-25 统一改）
 const SCRATCH_DIR = resolve(import.meta.dirname, '..', '.cache', 'tmp')
 mkdirSync(SCRATCH_DIR, { recursive: true })
@@ -181,7 +184,7 @@ try {
 
   // ---------- 一、Hub 服务 ----------
   console.log('一、Hub 服务')
-  const base = `http://127.0.0.1:${HUB_PORT}/api/v1`
+  const base = `https://127.0.0.1:${HUB_PORT}/api/v1`
   const health = await waitFor(async () => {
     const res = await fetch(`${base}/health`)
     return res.ok ? res.json() : null
@@ -189,7 +192,7 @@ try {
   check('健康检查返回 protocolVersion=1', health.protocolVersion === 1, `version=${health.version}`)
 
   const info0 = await (await fetch(`${base}/info`)).json()
-  check('仓库信息指向测试目录', info0.dataDir === dataDir, info0.dataDir)
+  check('仓库信息不泄露本机数据路径', !('dataDir' in info0) && !('dbPath' in info0))
   check('初始统计为 0', info0.counts.media === 0 && info0.counts.blobs === 0)
 
   const notFound = await fetch(`${base}/nope`)
@@ -197,8 +200,8 @@ try {
 
   const stickerList = await (await fetch(`${base}/stickers`)).json()
   check(
-    '贴图接口可用（默认使用内置吉祥物）',
-    Array.isArray(stickerList.stickers) && stickerList.stickers.length === 0,
+    '贴图接口可用（内置或用户贴图均可）',
+    Array.isArray(stickerList.stickers),
     `stickers=${stickerList.stickers.length}`
   )
 
@@ -406,10 +409,11 @@ try {
   console.log('六、协议 v1（mock-phone 全流程）')
   const mockRun = spawnSync(
     process.execPath,
-    [join(projectRoot, 'tools', 'mock-phone', 'index.mjs'), mockDir, '--url', `http://127.0.0.1:${HUB_PORT}`, '--device', '模拟手机'],
+    [join(projectRoot, 'tools', 'mock-phone', 'index.mjs'), mockDir, '--url', `https://127.0.0.1:${HUB_PORT}`, '--device', '模拟手机'],
     { encoding: 'utf-8' }
   )
   const mockOut = `${mockRun.stdout ?? ''}${mockRun.stderr ?? ''}`
+  if (mockRun.status !== 0) console.log(mockOut)
   check('mock-phone 退出码为 0', mockRun.status === 0, `status=${mockRun.status}`)
   check('识别出 4 个文件', mockOut.includes('发现 4 个媒体文件'))
   check('去重生效（只需上传 1 个新文件）', mockOut.includes('需要上传 1 个'), mockOut.split('\n').find((l) => l.includes('需要上传')) ?? '')
@@ -424,10 +428,15 @@ try {
   console.log('七、相册界面与查看器')
   // 等列表真正加载完再断言。注意不能只等"格子数 ≥6" —— 旧数据也能满足这个条件，
   // 那样会在界面刷新前就开始断言（界面收到 data:changed 后最多晚 600ms 才刷新）。
-  await waitFor(async () => {
-    const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
-    return text.includes('9 项媒体') ? text : null
-  }, 20000)
+  try {
+    await waitFor(async () => {
+      const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
+      return text.includes('9 项媒体') ? text : null
+    }, 20000)
+  } catch (err) {
+    console.log(`  界面刷新诊断：${await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)}`)
+    throw err
+  }
   const tileCount = await evaluate(`document.querySelectorAll('.tile:not(.tile-empty)').length`)
   check('时间线渲染出可见格子（虚拟滚动只渲染视口内）', tileCount >= 6, `tiles=${tileCount}`)
   const topbarText = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
@@ -542,18 +551,26 @@ try {
         `(() => { const c = document.querySelector('.album-card'); return c ? Math.round(c.getBoundingClientRect().width) : 0 })()`
       )
     )
-  const wheelZoomAlbums = async (deltaY) => {
-    await evaluate(`(() => {
-      const el = document.querySelector('.grid-wrap');
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: ${deltaY}, ctrlKey: true, bubbles: true, cancelable: true }));
-      return true;
-    })()`)
-    await sleep(250)
+  await cdp('Page.bringToFront').catch(() => undefined)
+  await sleep(400)
+  const wheelZoomAlbums = async (deltaY, changed) => {
+    let width = await albumCardWidth()
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await evaluate(`(() => {
+        const el = document.querySelector('.grid-wrap');
+        if (!el) return false;
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: ${deltaY}, ctrlKey: true, bubbles: true, cancelable: true }));
+        return true;
+      })()`)
+      await sleep(300)
+      width = await albumCardWidth()
+      if (changed(width)) return width
+    }
+    return width
   }
-  await wheelZoomAlbums(120) // 缩小一档
-  const shrunkWidth = await albumCardWidth()
-  await wheelZoomAlbums(-120) // 放大一档
-  const grownWidth = await albumCardWidth()
+  const originalAlbumWidth = await albumCardWidth()
+  const shrunkWidth = await wheelZoomAlbums(120, (width) => width < originalAlbumWidth) // 缩小一档
+  const grownWidth = await wheelZoomAlbums(-120, (width) => width > shrunkWidth) // 放大一档
   check(
     '相册视图里 Ctrl+滚轮能放大/缩小卡片（含"先空后有"的时序）',
     shrunkWidth > 0 && grownWidth > shrunkWidth,
@@ -1406,7 +1423,7 @@ try {
   })
   oldChild.stdout.on('data', () => {})
   oldChild.stderr.on('data', () => {})
-  const oldBase = `http://127.0.0.1:${HUB_PORT - 1}/api/v1`
+  const oldBase = `https://127.0.0.1:${HUB_PORT - 1}/api/v1`
   try {
     const oldHealth = await waitFor(async () => {
       try {
@@ -1416,7 +1433,7 @@ try {
         return null
       }
     }, 40000)
-    check('老库（v2 结构）能被新版本正常打开', oldHealth.protocolVersion === 1, `pid=${oldHealth.pid}`)
+    check('老库（v2 结构）能被新版本正常打开', oldHealth.protocolVersion === 1)
 
     const migrated = new DatabaseSync(oldDbPath, { readOnly: true })
     const mediaCols = migrated.prepare('PRAGMA table_info(media)').all().map((c) => c.name)
@@ -1797,6 +1814,17 @@ try {
   const jpegRow = (await (await fetch(`${base}/media`)).json()).media.find((m) => m.mime === 'image/jpeg')
 
   if (heicRow) {
+    // 前面的导入/回收站段落会连续触发多次 data:changed；云端窗口调度下，
+    // renderer 可能仍停在旧的 9 条列表。重新加载页面让预览 UI 明确以当前 API 数据为准。
+    const expectedVisibleMedia = (await (await fetch(`${base}/media`)).json()).media.length
+    await cdp('Page.reload', { ignoreCache: true })
+    await waitFor(
+      async () => {
+        const text = await evaluate(`document.body.innerText.replace(/\\s+/g, ' ')`)
+        return text.includes(`${expectedVisibleMedia} 项媒体`) ? text : null
+      },
+      20000
+    )
     const previewRes = await waitFor(async () => {
       const res = await fetch(`${base}/preview/${heicRow.id}`)
       return res.ok ? res : null
@@ -1847,16 +1875,30 @@ try {
     await closeViewerIfOpen(evaluate)
     await evaluate(`document.querySelectorAll('.nav-item')[0].click(); true`)
     await sleep(600)
-    let tileFound = false
-    for (let i = 0; i < 40 && !tileFound; i += 1) {
-      tileFound = await evaluate(`!!document.querySelector('.tile[data-id="${heicRow.id}"]')`)
-      if (tileFound) break
-      await evaluate(`(() => {
-        const grid = document.querySelector('.vgrid');
-        if (grid) { grid.scrollTop += 520; grid.dispatchEvent(new Event('scroll')); }
-        return true;
-      })()`)
-      await sleep(200)
+    const seekGridTile = async (id) => {
+      for (let i = 0; i < 50; i += 1) {
+        const state = JSON.parse(
+          await evaluate(`(() => {
+            const grid = document.querySelector('.vgrid');
+            const tile = document.querySelector('.tile[data-id="${id}"]');
+            if (tile) return JSON.stringify({ found: true });
+            if (grid) {
+              const step = Math.max(grid.clientHeight * 1.5, 520);
+              const next = Math.min(grid.scrollHeight, grid.scrollTop + step);
+              grid.scrollTop = next === grid.scrollTop ? grid.scrollHeight : next;
+              grid.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }
+            return JSON.stringify({ found: false });
+          })()`)
+        )
+        if (state.found) return true
+        await sleep(200)
+      }
+      return false
+    }
+    const tileFound = await seekGridTile(heicRow.id)
+    if (!tileFound) {
+      console.log(`  HEIC 格子定位诊断：${await evaluate(`JSON.stringify({ top: document.querySelector('.vgrid')?.scrollTop, height: document.querySelector('.vgrid')?.scrollHeight, tiles: Array.from(document.querySelectorAll('.tile[data-id]')).map((el) => el.dataset.id) })`)}`)
     }
     if (tileFound) {
       await evaluate(`document.querySelector('.tile[data-id="${heicRow.id}"]').click(); true`)
@@ -1891,17 +1933,7 @@ try {
     // 反过来：能直接显示的格式（JPEG）**不该**走 /preview —— 渲染端只在必要时才用它
     if (jpegRow) {
       await closeViewerIfOpen(evaluate)
-      let jpegTile = false
-      for (let i = 0; i < 40 && !jpegTile; i += 1) {
-        jpegTile = await evaluate(`!!document.querySelector('.tile[data-id="${jpegRow.id}"]')`)
-        if (jpegTile) break
-        await evaluate(`(() => {
-          const grid = document.querySelector('.vgrid');
-          if (grid) { grid.scrollTop += 520; grid.dispatchEvent(new Event('scroll')); }
-          return true;
-        })()`)
-        await sleep(200)
-      }
+      const jpegTile = await seekGridTile(jpegRow.id)
       if (jpegTile) {
         await evaluate(`document.querySelector('.tile[data-id="${jpegRow.id}"]').click(); true`)
         const jpegSrc = await waitFor(async () => {

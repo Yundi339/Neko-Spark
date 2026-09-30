@@ -1,7 +1,10 @@
 # 安卓端架构说明
 
 安卓端是一个 Kotlin 应用，负责把手机相册**备份到电脑**，以及把电脑上的备份**恢复回手机**。
-它与电脑端之间只通过 **HTTP 协议 v1** 通信（不共享代码、不共享构建系统）。
+它与电脑端之间只通过 **HTTPS 协议 v1** 通信（不共享代码、不共享构建系统）。
+
+所有 Android 连接都使用 HTTPS，并固定电脑端设置页显示的证书 SHA-256 指纹；电脑端首次启动时会在数据目录自动生成并持久化自签名证书。局域网/模拟器连接还要携带 `X-Gallery-Mirror-Token`，USB 回环可省略密钥。
+访问密钥保存在 Android 应用私有配置中，不能写入日志、源码或测试附件。Android 客户端拒绝 HTTP、公网地址和缺少证书指纹的连接。
 
 > 电脑端在 [`../desktop/`](../desktop/)；协议见 [`../docs/protocol-v1.md`](../docs/protocol-v1.md)；
 > 构建与运行见 [`README.md`](README.md)。
@@ -124,13 +127,13 @@ powershell -ExecutionPolicy Bypass -File scripts\android-test.ps1
 powershell -ExecutionPolicy Bypass -File scripts\android-test.ps1 -NoRun
 
 # 指定电脑端地址（模拟器用 10.0.2.2；真机用局域网 IP；USB 用 127.0.0.1 + adb reverse）
-powershell -ExecutionPolicy Bypass -File scripts\android-test.ps1 -Hub http://192.168.1.5:8787
+powershell -ExecutionPolicy Bypass -File scripts\android-test.ps1 -Hub https://192.168.x.x:8787
 ```
 
 直接调 Gradle：
 
 ```bash
-gradle -p android assembleDebug --offline --console=plain --no-daemon
+gradle -p android assembleDebugAppDebug --offline --console=plain --no-daemon
 ```
 
 > ⚠️ **外网受限的环境必须加 `--offline`**：Gradle/JVM 不走系统代理，不加会卡死在配置阶段

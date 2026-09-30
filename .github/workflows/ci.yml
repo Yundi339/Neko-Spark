@@ -1,0 +1,316 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Desktop typecheck, build and smoke test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm.cmd ci --no-audit --fund=false
+
+      - name: Install Electron runtime
+        run: node node_modules/electron/install.js
+
+      - name: Run desktop gate and end-to-end test
+        run: npm.cmd test
+
+      - name: Package desktop release artifacts
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        run: npm.cmd run dist
+
+      - name: Upload desktop release artifacts
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-release
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+            desktop/release/*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android compile and APK build
+    outputs:
+      version_name: ${{ steps.release-version.outputs.version_name }}
+      version_code: ${{ steps.release-version.outputs.version_code }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v6.3.0
+        with:
+          gradle-version: '8.9'
+
+      - name: Calculate Beijing release version
+        id: release-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(TZ=Asia/Shanghai date '+%Y.%m.%d-%H%M%S')"
+          version_code="$(TZ=Asia/Shanghai date '+%s')"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle assembleDebugAppDebug -PversionName="${{ steps.release-version.outputs.version_name }}" -PversionCode="${{ steps.release-version.outputs.version_code }}" --no-daemon --stacktrace --console=plain
+
+      - name: Prepare formal release signing
+        id: release-signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          values=(
+            "$ANDROID_KEYSTORE_BASE64"
+            "$ANDROID_KEYSTORE_PASSWORD"
+            "$ANDROID_KEY_ALIAS"
+            "$ANDROID_KEY_PASSWORD"
+          )
+          present=0
+          missing=0
+          for value in "${values[@]}"; do
+            if [[ -n "$value" ]]; then
+              present=$((present + 1))
+            else
+              missing=$((missing + 1))
+            fi
+          done
+          if (( present == 0 )); then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( missing != 0 )); then
+            echo 'Formal Android signing requires all four secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.' >&2
+            exit 1
+          fi
+          keystore_path="$RUNNER_TEMP/neko-spark-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "path=$keystore_path" >> "$GITHUB_OUTPUT"
+
+      - name: Build formal release APK
+        if: steps.release-signing.outputs.configured == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ steps.release-signing.outputs.path }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle assembleFormalAppRelease -PversionName="${{ steps.release-version.outputs.version_name }}" -PversionCode="${{ steps.release-version.outputs.version_code }}" --no-daemon --stacktrace --console=plain
+
+      - name: Verify APK signature
+        run: >-
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          verify --print-certs android/app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
+
+      - name: Verify formal APK signature
+        if: steps.release-signing.outputs.configured == 'true'
+        run: >-
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          verify --print-certs android/app/build/outputs/apk/formalApp/release/app-formalApp-release.apk
+
+      - name: Upload Android release artifact
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: android-release
+          path: android/app/build/outputs/apk/debugApp/debug/app-debugApp-debug.apk
+          # 正式签名未配置时仍保留 debug 发布链路；配置 Secrets 后会同时上传 release APK。
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload formal Android release artifact
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master') && steps.release-signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: android-formal-release
+          path: android/app/build/outputs/apk/formalApp/release/app-formalApp-release.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  security:
+    name: Security and dependency gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Reject private files and obvious secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files -z | grep -zEq '(^|/)(\.codex/|hub-token$|hub-cert\.pem$|hub-key\.pem$|local\.properties$|manifest\.db$)'; then
+            echo 'Tracked private or machine-local file detected.' >&2
+            exit 1
+          fi
+          private_marker='BEGIN ('
+          private_marker+='RSA|EC|OPENSSH|DSA|PRIVATE'
+          private_marker+=') KEY'
+          credential_pattern="${private_marker}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}"
+          if git grep -n -I -E "$credential_pattern" -- . ':!*.lock'; then
+            echo 'Possible credential material detected in tracked source.' >&2
+            exit 1
+          fi
+
+      - name: Scan for leaked secrets
+        uses: gitleaks/gitleaks-action@v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Audit npm dependencies
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+
+      - name: Run npm audit
+        working-directory: desktop
+        run: npm audit --package-lock-only --audit-level=high --registry=https://registry.npmjs.org
+
+  dependency-review:
+    name: Pull request dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5.0.0
+
+  release:
+    name: Publish GitHub release
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref_name == 'main' || github.ref_name == 'master') &&
+      needs.desktop.result == 'success' &&
+      needs.android.result == 'success' &&
+      needs.security.result == 'success'
+    needs:
+      - desktop
+      - android
+      - security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: '*-release'
+          path: release-assets
+          merge-multiple: true
+
+      - name: Calculate release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.android.outputs.version_name }}"
+          tag="v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          setup_file="$(find release-assets -maxdepth 1 -type f -name '*安装版.exe' -print -quit)"
+          portable_file="$(find release-assets -maxdepth 1 -type f -name '*便携版.exe' -print -quit)"
+          android_file="release-assets/app-debugApp-debug.apk"
+          test -n "$setup_file" && test -n "$portable_file" && test -f "$android_file"
+          cp "$setup_file" release-upload/Neko_Spark-windows-setup.exe
+          cp "$portable_file" release-upload/Neko_Spark-windows-portable.exe
+          cp "$android_file" release-upload/Neko_Spark-android-debug.apk
+          if [[ -f release-assets/app-formalApp-release.apk ]]; then
+            cp release-assets/app-formalApp-release.apk release-upload/Neko_Spark-android-release.apk
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "Neko_Spark ${RELEASE_TAG}" \
+              --generate-notes
+          fi
+
+      - name: Upload GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" release-upload/* --clobber; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1

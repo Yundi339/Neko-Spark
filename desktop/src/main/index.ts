@@ -13,6 +13,7 @@ if (!process.env.UV_THREADPOOL_SIZE) {
 }
 
 import { dirname, join } from 'node:path'
+import { X509Certificate } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
@@ -36,9 +37,12 @@ import { exportTo } from './hub/exporter'
 import { processPendingThumbs } from './hub/thumbs'
 import { thumbPool } from './hub/thumb-pool'
 import { cleanupDragStaging, prepareDragFiles, startNativeDrag } from './drag'
+import { loadOrCreateHubToken, tightenHubTokenPermissions } from './hub/auth'
+import { loadOrCreateHubTls, type HubTlsCredentials } from './hub/tls'
 
 /** 拖拽中转文件的保留时长（硬链接不占空间，但也不能无限攒） */
 const DRAG_STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const MAX_VIDEO_THUMB_BYTES = 16 * 1024 * 1024
 
 const dataDir = resolveDataDir()
 applyRuntimePaths(dataDir)
@@ -49,6 +53,8 @@ let paths: StoragePaths | null = null
 let hub: HubHandle | null = null
 let startupError = ''
 let taskCounter = 0
+let hubToken = ''
+let hubTls: HubTlsCredentials | null = null
 
 function send(channel: string, payload?: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -61,6 +67,8 @@ function buildStatus(): AppStatus {
     appName: APP_NAME,
     appVersion: app.getVersion(),
     protocolVersion: PROTOCOL_VERSION,
+    hubToken,
+    hubCertFingerprint: hubTls?.fingerprint ?? '',
     dataDir: paths?.dataDir ?? dataDir,
     dbPath: paths?.dbPath ?? '',
     runtimeDir: join(paths?.dataDir ?? dataDir, 'runtime'),
@@ -103,16 +111,21 @@ async function bootstrap(): Promise<void> {
     const seeded = seedBundledAssets(paths, bundledAssetsDir())
     if (seeded > 0) console.log(`[assets] 已补齐内置素材 ${seeded} 个 → ${paths.dataDir}`)
     db = new Database(paths.dbPath)
+    hubToken = loadOrCreateHubToken(paths.dataDir)
+    tightenHubTokenPermissions(paths.dataDir)
+    hubTls = await loadOrCreateHubTls(paths.dataDir)
     hub = await startHub({
       db,
       paths,
+      authToken: hubToken,
+      tls: hubTls,
       version: app.getVersion(),
       port: Number(process.env.GALLERY_MIRROR_PORT) || undefined,
       onDataChanged: () => send('data:changed'),
       onTaskProgress: (progress) => send('task:progress', progress),
       onSyncProgress: (progress) => send('sync:progress', progress)
     })
-    const url = hub.status.addresses[0] ?? `http://127.0.0.1:${hub.status.port}`
+    const url = hub.status.addresses[0] ?? `https://127.0.0.1:${hub.status.port}`
     console.log(`[hub] 已启动: ${url}`)
     console.log(`[hub] 仓库目录: ${paths.dataDir}`)
     console.log(`[hub] 运行时目录: ${join(paths.dataDir, 'runtime')}`)
@@ -154,8 +167,16 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(url)
+    } catch {
+      // 不把 file:, javascript: 等协议交给系统打开器。
+    }
     return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -163,6 +184,26 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+}
+
+function installHubCertificateHandler(): void {
+  app.on('certificate-error', (event, _webContents, url, _error, certificate, callback) => {
+    try {
+      const parsed = new URL(url)
+      const localHost = parsed.protocol === 'https:' &&
+        (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '[::1]' || parsed.hostname === '::1')
+      const normalize = (value: string): string => value.replace(/:/g, '').toUpperCase()
+      const presentedFingerprint = new X509Certificate(certificate.data).fingerprint256
+      if (localHost && hubTls && normalize(presentedFingerprint) === normalize(hubTls.fingerprint)) {
+        event.preventDefault()
+        callback(true)
+        return
+      }
+    } catch {
+      // 其他证书错误继续交给 Chromium 拒绝。
+    }
+    callback(false)
+  })
 }
 
 function registerIpc(): void {
@@ -296,6 +337,7 @@ function registerIpc(): void {
       if (!db || !paths) throw new Error('服务未初始化')
       const media = db.getMediaAny(Number(id))
       if (!media || media.kind !== 'video') return false
+      if (!(bytes instanceof ArrayBuffer) || bytes.byteLength > MAX_VIDEO_THUMB_BYTES) return false
       const buffer = Buffer.from(bytes ?? new ArrayBuffer(0))
       if (buffer.length < 32) return false
       // RIFF....WEBP 魔数：别让垃圾字节混进缩略图目录
@@ -339,6 +381,7 @@ function registerIpc(): void {
 app.whenReady().then(async () => {
   registerIpc()
   await bootstrap()
+  installHubCertificateHandler()
   createWindow()
 
   if (startupError) {

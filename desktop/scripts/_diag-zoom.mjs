@@ -7,7 +7,7 @@ import sharp from 'sharp'
 
 const HUB_PORT = Number(process.argv[2] ?? 8805)
 const CDP_PORT = Number(process.argv[3] ?? 9229)
-const HUB = `http://127.0.0.1:${HUB_PORT}/api/v1`
+const HUB = `https://127.0.0.1:${HUB_PORT}/api/v1`
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 

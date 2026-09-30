@@ -2,7 +2,8 @@
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\android-emulator.ps1
 
 $ErrorActionPreference = "Stop"
-$sdk = "D:\Android\Sdk"
+$sdk = $env:ANDROID_SDK_ROOT
+if (-not $sdk) { $sdk = Join-Path $env:LOCALAPPDATA "Android\Sdk" }
 $avd = if ($args.Count -gt 0) { $args[0] } else { "gmtest" }
 
 if (-not (Test-Path "$sdk\emulator\emulator.exe")) {
@@ -12,7 +13,7 @@ if (-not (Test-Path "$sdk\emulator\emulator.exe")) {
 
 $env:ANDROID_HOME = $sdk
 $env:ANDROID_SDK_ROOT = $sdk
-$env:ANDROID_AVD_HOME = "D:\Android\avd"
+if (-not $env:ANDROID_AVD_HOME) { $env:ANDROID_AVD_HOME = Join-Path $env:USERPROFILE ".android\avd" }
 $env:HOME = $env:USERPROFILE
 
 Write-Host "启动模拟器 AVD=$avd （首次启动约 1-2 分钟）..."

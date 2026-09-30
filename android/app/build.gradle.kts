@@ -18,6 +18,36 @@ val copyUserStickers = tasks.register<Sync>("copyUserStickers") {
     into(layout.buildDirectory.dir("generated/userStickers/stickers"))
 }
 
+// release 签名只能从本机环境或 CI Secrets 注入，避免把私钥和密码写进仓库。
+// 未提供正式签名时仍允许 assembleFormalRelease 生成未签名校验包，但发布脚本不会把它当成正式 APK。
+fun signingInput(name: String): String =
+    providers.environmentVariable(name)
+        .orElse(providers.gradleProperty(name))
+        .orNull
+        .orEmpty()
+
+val releaseKeystorePath = signingInput("ANDROID_KEYSTORE_PATH")
+val releaseKeystorePassword = signingInput("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingInput("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = signingInput("ANDROID_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all(String::isNotBlank)
+
+val buildVersionName = providers.gradleProperty("versionName")
+    .orElse(providers.environmentVariable("VERSION_NAME"))
+    .orNull
+    .orEmpty()
+    .ifBlank { "0.1.0" }
+val buildVersionCode = providers.gradleProperty("versionCode")
+    .orElse(providers.environmentVariable("VERSION_CODE"))
+    .orNull
+    ?.toIntOrNull()
+    ?: 1
+
 tasks.named("preBuild") {
     dependsOn(copyUserStickers)
 }
@@ -27,11 +57,23 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.gallerymirror.app"
+        applicationId = "com.gallerymirror.jiuerya"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
+    }
+
+    flavorDimensions += "package"
+    productFlavors {
+        create("formalApp") {
+            dimension = "package"
+            applicationId = "com.gallerymirror.jiuerya"
+        }
+        create("debugApp") {
+            dimension = "package"
+            applicationId = "com.gallerymirror.jiuerya_debug"
+        }
     }
 
     sourceSets {
@@ -41,9 +83,20 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Debug flavor 使用独立 applicationId，方便测试时与正式版并存安装。
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.create("formalRelease") {
+                    storeFile = file(releaseKeystorePath)
+                    storePassword = releaseKeystorePassword
+                    keyAlias = releaseKeyAlias
+                    keyPassword = releaseKeyPassword
+                }
+            }
         }
     }
 

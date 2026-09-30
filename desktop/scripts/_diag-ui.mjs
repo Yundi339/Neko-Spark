@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 
-const HUB = 'http://127.0.0.1:8801/api/v1'
+const HUB = 'https://127.0.0.1:8801/api/v1'
 const CDP = 9225
 const N = 60
 

@@ -770,10 +770,11 @@ button {
 /* 滚动时在滚动条左侧显示日期，位置跟着滑块中点走（类似手机相册）；
    top 由 VirtualGrid 按滑块位置动态计算，这里只负责垂直居中 */
 .scroll-date {
+  appearance: none;
   position: absolute;
   right: 24px;
   transform: translateY(-50%);
-  z-index: 6;
+  z-index: 8;
   padding: 5px 14px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.94);
@@ -782,19 +783,55 @@ button {
   color: #2d426b;
   font-size: 12.5px;
   font-weight: 600;
+  font-family: inherit;
   letter-spacing: 0.3px;
-  pointer-events: none;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
   animation: gm-fade-in 0.18s ease;
+}
+
+/* 覆盖原生滚动条的透明触控层。视觉仍由 Chromium 绘制，输入统一交给 VirtualGrid，
+   这样鼠标、触控和日期气泡都能用相同的映射快速定位时间线。 */
+.scroll-rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 7;
+  width: 16px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.scroll-rail:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.scroll-date:hover {
+  border-color: var(--accent-2);
+  box-shadow: var(--shadow-hover);
+}
+
+.scroll-date[data-dragging='true'] {
+  cursor: grabbing;
+  background: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(74, 159, 255, 0.26);
 }
 
 @keyframes gm-fade-in {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(calc(-50% - 4px));
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translateY(-50%);
   }
 }
 

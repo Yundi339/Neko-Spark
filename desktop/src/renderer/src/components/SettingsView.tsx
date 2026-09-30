@@ -181,6 +181,19 @@ export default function SettingsView({
               adb forward tcp:{status?.hub.port || 8787} tcp:{status?.hub.port || 8787}
             </code>
           </div>
+          <div className="row column">
+            <span className="row-label">局域网访问密钥</span>
+            <code className="code-block">{status?.hubToken || '初始化中...'}</code>
+            <span className="hint">
+              手机通过 WiFi 连接时，把这串密钥填入手机端；密钥只保存在本机数据目录，不会通过 Hub 接口返回。
+              USB 回环连接可留空。
+            </span>
+          </div>
+          <div className="row column">
+            <span className="row-label">HTTPS 证书指纹</span>
+            <code className="code-block">{status?.hubCertFingerprint || '初始化中...'}</code>
+            <span className="hint">手机端首次连接时填写这串 SHA-256 指纹，用于固定本机自动生成的证书。</span>
+          </div>
         </div>
       </section>
 

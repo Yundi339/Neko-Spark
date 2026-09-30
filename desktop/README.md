@@ -3,7 +3,7 @@
 把安卓手机相册备份到电脑，并以"手机相册一样的方式"浏览；之后可原样导出 / 迁移回手机。
 
 本目录是**电脑端**：Electron 应用，同时充当整个系统的**本地服务 Hub**
-（HTTP `8787` + UDP 发现 `8788`）——手机端要连的就是它。
+（HTTPS `8787` + UDP 发现 `8788`）——手机端要连的就是它。
 
 > 📱 **手机端不在这个目录** —— 安卓 App 在 [`../android/`](../android/)。
 > 两端接口契约：[`../docs/protocol-v1.md`](../docs/protocol-v1.md)　共用素材：[`../GalleryMirrorData/`](../GalleryMirrorData/)
@@ -36,8 +36,9 @@ npm run dist:nsis      # 打包 Windows 安装版到 desktop/release/
 
 Windows PowerShell 默认禁止运行 `npm.ps1`，请统一使用 `npm.cmd`。
 
-**接手机备份**：启动后，同一 WiFi 下手机访问界面显示的局域网地址；
-USB 用 `adb forward tcp:8787 tcp:8787`。
+**接手机备份**：Hub 强制使用 HTTPS，首次启动会在数据目录自动生成并复用自签名证书。
+手机端填写设置页显示的 HTTPS 证书 SHA-256 指纹；同一 WiFi 下还要填写局域网访问密钥，
+USB 用 `adb forward tcp:8787 tcp:8787` 时可留空密钥。局域网地址和实际端口以设置页为准。
 
 ## 架构
 

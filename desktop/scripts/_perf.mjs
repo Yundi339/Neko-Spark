@@ -131,7 +131,7 @@ function ev(expr, timeoutMs = 600000) {
 
 // ---------------- 体检 ----------------
 async function run(hubPort, cdpPort, photoDir) {
-  const HUB = `http://127.0.0.1:${hubPort}/api/v1`
+  const HUB = `https://127.0.0.1:${hubPort}/api/v1`
   await connect(hubPort, cdpPort)
   console.log(`已连接（窗口标题校验通过）  机器 ${CORES} 核\n`)
 

@@ -9,7 +9,7 @@
  *   4. POST /api/v1/commit   入库
  *
  * 用法：
- *   node tools/mock-phone/index.mjs <文件夹> [--url http://127.0.0.1:8787] [--device 设备名]
+ *   node tools/mock-phone/index.mjs <文件夹> [--url https://127.0.0.1:8787] [--device 设备名]
  */
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
@@ -22,7 +22,7 @@ const CHUNK_SIZE = 8 * 1024 * 1024
 
 function parseArgs(argv) {
   const positional = []
-  const options = { url: 'http://127.0.0.1:8787', device: '模拟手机' }
+  const options = { url: 'https://127.0.0.1:8787', device: '模拟手机' }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--url') options.url = argv[++i]
@@ -141,11 +141,16 @@ async function uploadBlob(base, sha256, filePath, size) {
 async function main() {
   const { folder, options } = parseArgs(process.argv.slice(2))
   if (!folder) {
-    console.error('用法：node tools/mock-phone/index.mjs <文件夹> [--url http://127.0.0.1:8787] [--device 名称]')
+    console.error('用法：node tools/mock-phone/index.mjs <文件夹> [--url https://127.0.0.1:8787] [--device 名称]')
     process.exit(2)
   }
 
   const root = resolve(folder)
+  const targetUrl = new URL(options.url)
+  if (targetUrl.protocol === 'https:' && ['127.0.0.1', 'localhost', '[::1]'].includes(targetUrl.hostname)) {
+    // 仅测试本机自动生成的自签名证书；手机端使用证书指纹固定，不走这个绕过。
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+  }
   const base = `${options.url.replace(/\/$/, '')}/api/v1`
   const deviceId = `mock-${createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 12)}`
 
