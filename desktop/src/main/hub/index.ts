@@ -13,6 +13,7 @@ import {
   TRASH_RETENTION_DAYS,
   type AlbumRecord,
   type CommitRequest,
+  type DeviceInfo,
   type DeviceRecord,
   type HubStatus,
   type ManifestRequest,
@@ -505,6 +506,13 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           return
         }
         const body = await readJsonBody<{ code?: unknown; device?: unknown }>(req)
+        // 新版手机会在配对时带上设备身份；旧版只发送 code，仍按兼容路径放行，
+        // 后续 manifest/commit 会补登记。带了设备字段却不合法时不能静默丢弃，
+        // 否则手机会显示“配对成功”，电脑端却永远没有对应设备。
+        if (body?.device !== undefined && !isValidDevice(body.device)) {
+          sendJson(res, 400, { error: 'invalid_device' })
+          return
+        }
         const code = typeof body?.code === 'string' ? body.code.trim() : ''
         pairing.attempts += 1
         if (!/^\d{6}$/.test(code) || code !== pairing.code) {
@@ -517,9 +525,20 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         pairing = next
         status.pairingCode = next.code
         status.pairingExpiresAt = next.expiresAt
+        const device = body?.device as DeviceInfo | undefined
+        if (device) {
+          // 配对成功就先建立一条没有媒体的设备记录，让设备页立即能看到这台手机；
+          // 最近同步时间仍等首次 manifest/commit 后再写，避免把“已配对”误报成“已备份”。
+          db.upsertDevice({
+            id: device.deviceId,
+            name: device.name || device.deviceId,
+            model: device.model,
+            androidId: device.androidVersion
+          })
+        }
         options.onDataChanged?.()
         options.onPairing?.()
-        sendJson(res, 200, { ok: true, token: options.authToken })
+        sendJson(res, 200, { ok: true, token: options.authToken, deviceRegistered: Boolean(device) })
         return
       }
 
