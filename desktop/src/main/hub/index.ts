@@ -765,7 +765,13 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         segments[2] === 'sticker' &&
         segments[3]
       ) {
-        const name = decodeURIComponent(segments[3])
+        let name: string
+        try {
+          name = decodeURIComponent(segments[3])
+        } catch {
+          sendJson(res, 400, { error: 'invalid_name' })
+          return
+        }
         // 防目录穿越：只允许纯文件名
         if (name.includes('/') || name.includes('\\') || name.includes('..') || !isStickerFile(name)) {
           sendJson(res, 400, { error: 'invalid_name' })

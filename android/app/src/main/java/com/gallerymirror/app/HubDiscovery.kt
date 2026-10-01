@@ -30,7 +30,8 @@ object HubDiscovery {
     data class Found(val name: String, val host: String, val port: Int, val version: String, val fingerprint: String) {
         val url: String
             get() {
-                val urlHost = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+                val encodedHost = host.replace("%", "%25")
+                val urlHost = if (encodedHost.contains(':') && !encodedHost.startsWith('[')) "[$encodedHost]" else encodedHost
                 return "https://$urlHost:$port"
             }
     }
