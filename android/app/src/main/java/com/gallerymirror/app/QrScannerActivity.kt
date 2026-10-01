@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.ImageFormat
 import android.hardware.Camera
 import android.net.Uri
 import android.os.Bundle
@@ -35,10 +36,10 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
     private lateinit var surface: SurfaceView
     private var camera: Camera? = null
     private var previewSize: Camera.Size? = null
-    private var previewBuffer: ByteArray? = null
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val decoding = AtomicBoolean(false)
     private var finished = false
+    @Volatile private var shuttingDown = false
 
     private val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
         put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
@@ -70,35 +71,51 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_CAMERA && grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) finish()
+        if (requestCode != REQUEST_CAMERA) return
+        if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            setResult(RESULT_CANCELED)
+            finish()
+        } else if (::surface.isInitialized) {
+            // 权限返回后 Surface 可能已经创建过，主动补一次启动，避免黑屏/空白页。
+            surface.post { if (!finished && camera == null) startCamera(surface.holder) }
+        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        startCamera(holder)
+    }
+
+    private fun startCamera(holder: SurfaceHolder) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
+        shuttingDown = false
         try {
-            camera = Camera.open().also { opened ->
-                opened.setPreviewDisplay(holder)
-                opened.setDisplayOrientation(displayOrientation())
-                val params = opened.parameters
-                val selected = params.supportedPreviewSizes
-                    ?.filter { it.width >= 640 && it.height >= 480 }
-                    ?.minByOrNull { it.width * it.height }
-                    ?: params.supportedPreviewSizes.firstOrNull()
-                if (selected != null) {
-                    params.setPreviewSize(selected.width, selected.height)
-                    previewSize = selected
-                }
-                opened.parameters = params
-                val size = previewSize
-                if (size != null) {
-                    // NV21 4:2:0 需要约 1.5 倍宽高的回调缓冲区。
-                    previewBuffer = ByteArray(size.width * size.height * 3 / 2)
-                    opened.addCallbackBuffer(previewBuffer)
-                    opened.setPreviewCallbackWithBuffer(this)
-                }
-                opened.startPreview()
+            val opened = Camera.open()
+            camera = opened
+            opened.setPreviewDisplay(holder)
+            opened.setDisplayOrientation(displayOrientation())
+            val params = opened.parameters
+            params.previewFormat = ImageFormat.NV21
+            val supportedSizes = params.supportedPreviewSizes.orEmpty()
+            val selected = supportedSizes
+                .filter { it.width >= 640 && it.height >= 480 }
+                .minByOrNull { it.width * it.height }
+                ?: supportedSizes.firstOrNull()
+            if (selected != null) {
+                params.setPreviewSize(selected.width, selected.height)
+                previewSize = selected
             }
+            opened.parameters = params
+            val size = opened.parameters.previewSize ?: previewSize
+            if (size != null) {
+                previewSize = size
+                // NV21 4:2:0 需要约 1.5 倍宽高的回调缓冲区；准备两个，避免部分 ROM 复用首帧时崩溃。
+                val bufferSize = size.width * size.height * 3 / 2 + 1
+                repeat(2) { opened.addCallbackBuffer(ByteArray(bufferSize)) }
+                opened.setPreviewCallbackWithBuffer(this)
+            }
+            opened.startPreview()
         } catch (_: Exception) {
+            releaseCamera()
             setResult(RESULT_CANCELED)
             finish()
         }
@@ -113,19 +130,30 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
     override fun onPreviewFrame(data: ByteArray?, source: Camera?) {
         val size = previewSize ?: return
         val frame = data ?: return
+        if (finished || shuttingDown) return
         if (!decoding.compareAndSet(false, true)) {
-            source?.addCallbackBuffer(frame)
+            requeue(source, frame)
             return
         }
-        executor.execute {
-            val text = decode(frame, size.width, size.height)
-            decoding.set(false)
-            if (text != null) {
-                runOnUiThread { finishWith(text) }
-            } else if (!finished) {
-                source?.addCallbackBuffer(frame)
+        try {
+            executor.execute {
+                val text = runCatching { decode(frame, size.width, size.height) }.getOrNull()
+                decoding.set(false)
+                if (text != null && !finished) {
+                    runOnUiThread { finishWith(text) }
+                } else {
+                    requeue(source, frame)
+                }
             }
+        } catch (_: Exception) {
+            decoding.set(false)
+            requeue(source, frame)
         }
+    }
+
+    private fun requeue(source: Camera?, frame: ByteArray) {
+        if (finished || shuttingDown) return
+        runCatching { source?.addCallbackBuffer(frame) }
     }
 
     private fun decode(bytes: ByteArray, width: Int, height: Int): String? {
@@ -149,10 +177,14 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
     }
 
     private fun releaseCamera() {
-        camera?.setPreviewCallbackWithBuffer(null)
-        camera?.stopPreview()
-        camera?.release()
+        shuttingDown = true
+        val current = camera
         camera = null
+        if (current != null) {
+            runCatching { current.setPreviewCallbackWithBuffer(null) }
+            runCatching { current.stopPreview() }
+            runCatching { current.release() }
+        }
     }
 
     override fun onPause() {
