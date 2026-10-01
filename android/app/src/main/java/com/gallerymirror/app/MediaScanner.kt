@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 
 data class MediaEntry(
@@ -86,11 +87,13 @@ object MediaScanner {
                 val id = cursor.getLong(idCol)
                 val size = if (sizeCol >= 0 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else 0L
                 val dataPath = if (dataCol >= 0 && !cursor.isNull(dataCol)) cursor.getString(dataCol) else ""
-                val relative = when {
+                val rawRelative = when {
                     relativePathCol >= 0 && !cursor.isNull(relativePathCol) -> cursor.getString(relativePathCol) ?: ""
-                    dataPath.contains('/') -> dataPath.substring(0, dataPath.lastIndexOf('/') + 1)
-                    else -> ""
+                    else -> legacyRelativePath(context, dataPath)
                 }
+                // Android 9 及以下只有绝对 DATA 路径；协议只允许相册相对路径，
+                // 否则 Hub 会按路径穿越风险返回 400，整轮备份都会被拒绝。
+                val relative = normalizeRelativePath(rawRelative)
                 entries.add(
                     MediaEntry(
                         id = id,
@@ -119,5 +122,34 @@ object MediaScanner {
             }
         }
         return entries
+    }
+
+    /** 把旧版 MediaStore 的绝对路径转换为相册相对路径；无法确认根目录时安全地返回空路径。 */
+    private fun legacyRelativePath(context: Context, dataPath: String): String {
+        if (dataPath.isBlank()) return ""
+        val normalized = dataPath.replace('\\', '/')
+        val parent = normalized.substringBeforeLast('/', "")
+        val roots = buildList {
+            add(Environment.getExternalStorageDirectory().absolutePath.replace('\\', '/').trimEnd('/'))
+            context.getExternalFilesDirs(null).forEach { file ->
+                val path = file?.absolutePath?.replace('\\', '/') ?: return@forEach
+                val marker = "/Android/"
+                val index = path.indexOf(marker)
+                if (index > 0) add(path.substring(0, index).trimEnd('/'))
+            }
+            add("/sdcard")
+            add("/storage/emulated/0")
+        }.distinct()
+        val root = roots.firstOrNull { parent == it || parent.startsWith("$it/") } ?: return ""
+        return parent.removePrefix(root).trim('/')
+    }
+
+    /** 只保留协议允许的相对目录，并统一为带尾斜杠的 MediaStore 形式。 */
+    private fun normalizeRelativePath(raw: String): String {
+        val value = raw.replace('\\', '/').trim()
+        if (value.isEmpty() || value.startsWith('/') || Regex("^[A-Za-z]:").containsMatchIn(value)) return ""
+        val parts = value.split('/').filter { it.isNotEmpty() }
+        if (parts.any { it == "." || it == ".." || it.any { ch -> ch.code < 0x20 || ch.code == 0x7f } }) return ""
+        return if (parts.isEmpty()) "" else parts.joinToString("/") + "/"
     }
 }

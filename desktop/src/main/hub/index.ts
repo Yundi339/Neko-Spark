@@ -1134,8 +1134,19 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/manifest') {
         const body = await readJsonBody<ManifestRequest>(req)
         const items = body?.items ?? []
-        if (!isValidDevice(body.device) || !Array.isArray(items) || items.length > 250000 || items.some((item) => !isSafeMediaIdentity(item))) {
-          sendJson(res, 400, { error: 'invalid_manifest' })
+        const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
+        if (!isValidDevice(body?.device) || !Array.isArray(items) || items.length > 250000 || invalidIndex >= 0) {
+          sendJson(res, 400, {
+            error: 'invalid_manifest',
+            reason: !isValidDevice(body?.device)
+              ? 'invalid_device'
+              : !Array.isArray(items)
+                ? 'items_not_array'
+                : items.length > 250000
+                  ? 'too_many_items'
+                  : 'invalid_media_item',
+            ...(invalidIndex >= 0 ? { index: invalidIndex } : {})
+          })
           return
         }
         // 用户在电脑上删过的（墓碑）：既不要它再传、也不要它再入库 ——
@@ -1230,8 +1241,20 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/commit') {
         const body = await readJsonBody<CommitRequest>(req)
         const device = body?.device
-        if (!isValidDevice(device) || !Array.isArray(body?.items) || body.items.length > 250000 || body.items.some((item) => !isSafeMediaIdentity(item))) {
-          sendJson(res, 400, { error: 'invalid_commit' })
+        const items = body?.items
+        const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
+        if (!isValidDevice(device) || !Array.isArray(items) || items.length > 250000 || invalidIndex >= 0) {
+          sendJson(res, 400, {
+            error: 'invalid_commit',
+            reason: !isValidDevice(device)
+              ? 'invalid_device'
+              : !Array.isArray(items)
+                ? 'items_not_array'
+                : items.length > 250000
+                  ? 'too_many_items'
+                  : 'invalid_media_item',
+            ...(invalidIndex >= 0 ? { index: invalidIndex } : {})
+          })
           return
         }
         db.upsertDevice({
