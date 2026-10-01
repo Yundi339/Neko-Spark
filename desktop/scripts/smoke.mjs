@@ -1957,6 +1957,29 @@ try {
     check('HEIC 的 /preview/:id 能出图（image/webp）', false, '测试库里没有 example.heic')
   }
 
+  // ---------- 十七、配对成功后立即登记设备 ----------
+  console.log('十七、配对成功后立即登记设备')
+  const pairingSnapshot = JSON.parse(
+    await evaluate(`window.gm.getStatus().then((status) => JSON.stringify({ code: status.hub.pairingCode }))`)
+  )
+  const pairedDevice = { deviceId: 'smoke-pair-device', name: '配对测试设备', model: 'MockPair' }
+  const pairingResponse = await fetch(`${base}/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ protocolVersion: 1, code: pairingSnapshot.code, device: pairedDevice })
+  })
+  const pairingResult = await pairingResponse.json()
+  check('配对接口登记设备并返回成功', pairingResponse.status === 200 && pairingResult.deviceRegistered === true)
+  const registeredDevice = await waitFor(async () => {
+    const devices = (await (await fetch(`${base}/devices`)).json()).devices
+    return devices.find((device) => device.id === pairedDevice.deviceId) ?? null
+  }, 8000)
+  check(
+    '配对成功后设备页数据立即可见',
+    Boolean(registeredDevice) && registeredDevice.mediaCount === 0,
+    registeredDevice ? `${registeredDevice.name} · ${registeredDevice.mediaCount} 项` : '设备未登记'
+  )
+
   passed = results.every((r) => r.ok)
 } catch (err) {
   console.log('')

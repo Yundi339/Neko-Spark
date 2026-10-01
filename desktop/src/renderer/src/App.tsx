@@ -222,6 +222,8 @@ export default function App(): JSX.Element {
       void window.gm.getStatus().then((next) => {
         setStatus(next)
         setPairingPopupStatus(next)
+        // 配对接口会先登记轻量设备记录；主动补刷一次，避免 data:changed 在页面初始加载期间丢失。
+        if (next.hub.running) scheduleRefresh(apiBase(next.hub.port))
       })
     })
     return () => {

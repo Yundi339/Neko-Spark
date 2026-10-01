@@ -33,7 +33,21 @@ Content-Type: application/json
 { "protocolVersion": 1, "code": "123456" }
 ```
 
-成功响应：`{ "ok": true, "token": "..." }`。配对码错误返回 `401`，过期或已使用返回 `410`，连续错误次数过多返回 `429`。
+新版手机也会附带设备身份：
+
+```json
+{
+  "protocolVersion": 1,
+  "code": "123456",
+  "device": { "deviceId": "手机标识", "name": "我的手机" }
+}
+```
+
+`device` 是兼容性可选字段。带设备身份的配对成功后，Hub 会先登记一条媒体数为 0 的设备记录，
+设备页可以立即显示这台手机；首次提交 manifest/commit 后才更新最近同步时间和媒体内容。
+
+成功响应：`{ "ok": true, "token": "...", "deviceRegistered": true }`；旧版请求未带设备身份时 `deviceRegistered` 为 `false`。
+配对码错误返回 `401`，过期或已使用返回 `410`，连续错误次数过多返回 `429`。
 配对码不通过 mDNS、普通 HTTP 接口或日志返回。
 
 > 状态：本文档中标注 ✅ 的接口已在电脑端实现并通过端到端测试（`tools/mock-phone`）。
