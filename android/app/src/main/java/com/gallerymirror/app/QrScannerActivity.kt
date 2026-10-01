@@ -2,6 +2,7 @@ package com.gallerymirror.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -25,6 +26,7 @@ import java.util.EnumMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
 /**
  * 轻量二维码扫描页，只依赖 Android 旧 Camera API 和 ZXing core，保持 minSdk 26 可用。
@@ -33,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 @Suppress("DEPRECATION")
 class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCallback {
 
-    private lateinit var surface: SurfaceView
+    private lateinit var surface: PreviewSurfaceView
     private var camera: Camera? = null
     private var previewSize: Camera.Size? = null
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -49,8 +51,8 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        surface = SurfaceView(this)
-        root.addView(surface, FrameLayout.LayoutParams(-1, -1))
+        surface = PreviewSurfaceView(this)
+        root.addView(surface, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(
             TextView(this).apply {
                 text = "将电脑端二维码放入取景框\n扫描结果只用于局域网配对"
@@ -120,6 +122,10 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
             val size = opened.parameters.previewSize ?: previewSize
             if (size != null) {
                 previewSize = size
+                // 相机回调通常是横向 4:3，而扫描页是竖屏；保持预览比例，避免二维码被
+                // 拉伸后肉眼看着变形、取景框和实际解码区域不一致。
+                val rotated = displayOrientation() % 180 != 0
+                surface.setPreviewAspect(if (rotated) size.height else size.width, if (rotated) size.width else size.height)
                 // NV21 4:2:0 需要约 1.5 倍宽高的回调缓冲区；准备两个，避免部分 ROM 复用首帧时崩溃。
                 val bufferSize = size.width * size.height * 3 / 2 + 1
                 repeat(2) { opened.addCallbackBuffer(ByteArray(bufferSize)) }
@@ -225,6 +231,35 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
             else -> 0
         }
         return (info.orientation - rotation + 360) % 360
+    }
+
+    /** SurfaceView 默认会把相机帧硬拉满屏，部分手机因此把二维码拉变形。 */
+    private class PreviewSurfaceView(context: Context) : SurfaceView(context) {
+        private var aspectWidth = 0
+        private var aspectHeight = 0
+
+        fun setPreviewAspect(width: Int, height: Int) {
+            aspectWidth = width
+            aspectHeight = height
+            requestLayout()
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val maxWidth = MeasureSpec.getSize(widthMeasureSpec)
+            val maxHeight = MeasureSpec.getSize(heightMeasureSpec)
+            if (aspectWidth <= 0 || aspectHeight <= 0 || maxWidth <= 0 || maxHeight <= 0) {
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                return
+            }
+            val ratio = aspectWidth.toFloat() / aspectHeight.toFloat()
+            var width = maxWidth
+            var height = (width / ratio).roundToInt()
+            if (height > maxHeight) {
+                height = maxHeight
+                width = (height * ratio).roundToInt()
+            }
+            setMeasuredDimension(width.coerceAtLeast(1), height.coerceAtLeast(1))
+        }
     }
 
     companion object {

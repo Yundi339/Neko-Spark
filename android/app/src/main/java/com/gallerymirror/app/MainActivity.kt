@@ -22,8 +22,10 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -287,9 +289,7 @@ class MainActivity : ComponentActivity() {
             if (checked && !allowed) {
                 pendingOverlayEnable = true
                 log("请在系统设置中允许悬浮窗权限，允许后再打开此开关")
-                runCatching {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                }
+                openOverlayPermissionSettings()
             } else {
                 // 用户主动关闭时取消待处理意图，避免从设置页返回后又被自动打开。
                 pendingOverlayEnable = false
@@ -340,9 +340,16 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(14), dp(14), dp(14), dp(14))
             setLineSpacing(dp(3).toFloat(), 1f)
         }
-        root.addView(logText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        // 页面内容比小屏高度长时交给外层 ScrollView 滚动；日志保留固定高度，避免权重在
+        // ScrollView 的非约束测量下吞掉其它控件或让整页无法向下滚动。
+        root.addView(logText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(180)).apply { topMargin = dp(8) })
 
-        setContentView(root)
+        val page = ScrollView(this).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = true
+        }
+        page.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        setContentView(page)
         observeSyncState()
 
         connectButton.setOnClickListener { testConnection() }
@@ -542,6 +549,19 @@ class MainActivity : ComponentActivity() {
         qrScannerLauncher.launch(Intent(this, QrScannerActivity::class.java))
     }
 
+    private fun openOverlayPermissionSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        // 部分 ROM 会忽略带 package 的专属页面，失败后退回系统悬浮窗权限列表。
+        val intents = listOf(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+        )
+        for (intent in intents) {
+            if (runCatching { startActivity(intent) }.isSuccess) return
+        }
+        Toast.makeText(this, "请在系统设置中打开“允许显示在其他应用上层”", Toast.LENGTH_LONG).show()
+    }
+
     private fun handlePairIntent(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme != "neko-spark" || data.host != "pair") return
@@ -603,10 +623,12 @@ class MainActivity : ComponentActivity() {
                     .apply()
                 statusText.text = "配对成功"
                 log("已与电脑端配对，访问密钥已安全保存到应用私有配置")
+                Toast.makeText(this@MainActivity, "配对成功，连接信息已自动保存", Toast.LENGTH_LONG).show()
                 testConnection()
             } catch (e: Exception) {
                 statusText.text = "配对失败"
                 log("配对失败：${e.message}")
+                Toast.makeText(this@MainActivity, "配对失败，请检查地址、证书指纹和配对码", Toast.LENGTH_LONG).show()
             }
         }
     }

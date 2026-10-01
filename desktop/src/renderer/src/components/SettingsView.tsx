@@ -1,6 +1,5 @@
-import { useEffect, useState, type JSX } from 'react'
+import { useState, type JSX } from 'react'
 import type { AppStatus } from '@shared/types'
-import QRCode from 'qrcode'
 import mascotStar from '../assets/stickers/mascot-star.svg'
 
 interface SettingsViewProps {
@@ -19,43 +18,7 @@ export default function SettingsView({
   onToggleDeleted
 }: SettingsViewProps): JSX.Element {
   const [pendingDir, setPendingDir] = useState('')
-  const [pairingStatus, setPairingStatus] = useState<AppStatus | null>(status)
-  const [pairingQr, setPairingQr] = useState('')
-
-  useEffect(() => setPairingStatus(status), [status])
-
-  const activeStatus = pairingStatus ?? status
-  const pairingAddress = activeStatus?.hub.addresses[0] ?? ''
-  const pairingCode = activeStatus?.hub.pairingCode ?? ''
-  const pairingLink = pairingAddress && pairingCode
-    ? (() => {
-        const link = new URL('neko-spark://pair')
-        link.searchParams.set('url', pairingAddress)
-        link.searchParams.set('fingerprint', activeStatus?.hubCertFingerprint ?? '')
-        link.searchParams.set('code', pairingCode)
-        return link.toString()
-      })()
-    : ''
-
-  useEffect(() => {
-    let alive = true
-    if (!pairingLink) {
-      setPairingQr('')
-      return () => {
-        alive = false
-      }
-    }
-    void QRCode.toDataURL(pairingLink, { width: 240, margin: 2, errorCorrectionLevel: 'M' })
-      .then((dataUrl) => {
-        if (alive) setPairingQr(dataUrl)
-      })
-      .catch(() => {
-        if (alive) setPairingQr('')
-      })
-    return () => {
-      alive = false
-    }
-  }, [pairingLink])
+  const activeStatus = status
 
   const openDir = (): void => {
     void window.gm.openDataDir()
@@ -74,13 +37,8 @@ export default function SettingsView({
     void window.gm.restartApp()
   }
 
-  const refreshPairingCode = async (): Promise<void> => {
-    const next = await window.gm.refreshPairingCode()
-    setPairingStatus(next)
-  }
-
   return (
-    <div className="grid">
+    <div className="grid settings-grid">
       {pendingDir ? (
         <section className="card span-2 banner">
           <div>
@@ -236,24 +194,6 @@ export default function SettingsView({
             <span className="row-label">HTTPS 证书指纹</span>
             <code className="code-block">{activeStatus?.hubCertFingerprint || '初始化中...'}</code>
             <span className="hint">手机端首次连接时填写这串 SHA-256 指纹，用于固定本机自动生成的证书。</span>
-          </div>
-          <div className="row column">
-            <span className="row-label">局域网配对</span>
-            <div className="pairing-panel">
-              {pairingQr ? <img className="pairing-qr" src={pairingQr} alt="手机扫描配对二维码" /> : null}
-              <div className="pairing-details">
-                <strong className="pairing-code">{pairingCode || '初始化中...'}</strong>
-                <span className="hint">
-                  手机点“搜索电脑”后选择本机，再输入这个 6 位配对码；也可以直接扫描二维码。二维码只含地址、证书指纹和一次性配对码。
-                </span>
-                {activeStatus?.hub.pairingExpiresAt ? (
-                  <span className="hint">有效期至 {new Date(activeStatus.hub.pairingExpiresAt).toLocaleTimeString()}</span>
-                ) : null}
-                <button type="button" className="btn" onClick={() => void refreshPairingCode()}>
-                  刷新配对码
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       </section>

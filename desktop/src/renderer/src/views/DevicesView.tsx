@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react'
 import type { AppStatus, DeviceRecord, SyncProgress, TaskProgress } from '@shared/types'
 import { formatCount, formatDateTime, formatSize } from '../utils/format'
 import mascotHappy from '../assets/stickers/mascot-happy.svg'
+import PairingCard from '../components/PairingCard'
 
 const MILESTONES = [
   { id: 'M1', label: '项目骨架 / 本地服务 / 数据库 / 存储目录', state: 'done' },
@@ -181,7 +182,8 @@ export default function DevicesView({
   }
 
   return (
-    <div className="grid">
+    <div className="grid devices-grid">
+      <PairingCard status={status} />
       <section className="card span-2">
         <div className="card-head">
           <h2>媒体库</h2>
