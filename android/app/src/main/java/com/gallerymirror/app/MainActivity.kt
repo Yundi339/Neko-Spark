@@ -50,6 +50,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var restoreButton: Button
     private lateinit var overlaySwitch: Switch
     private var afterPermission: (() -> Unit)? = null
+    // 系统设置页返回时保留用户刚才的开启意图；否则先把开关拨回去会触发监听器，永久写入 false。
+    private var pendingOverlayEnable = false
+    private var updatingOverlaySwitch = false
 
     private val qrScannerLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -278,14 +281,18 @@ class MainActivity : ComponentActivity() {
             setTextColor(colorText)
             isChecked = prefs.getBoolean("overlay_enabled", false)
         }
-        overlaySwitch.setOnCheckedChangeListener { button, checked ->
-            if (checked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                button.isChecked = false
+        overlaySwitch.setOnCheckedChangeListener { _, checked ->
+            if (updatingOverlaySwitch) return@setOnCheckedChangeListener
+            val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+            if (checked && !allowed) {
+                pendingOverlayEnable = true
                 log("请在系统设置中允许悬浮窗权限，允许后再打开此开关")
                 runCatching {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                 }
             } else {
+                // 用户主动关闭时取消待处理意图，避免从设置页返回后又被自动打开。
+                pendingOverlayEnable = false
                 prefs.edit().putBoolean("overlay_enabled", checked).apply()
                 log(if (checked) "已开启同步悬浮窗" else "已关闭同步悬浮窗")
             }
@@ -380,8 +387,18 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (::overlaySwitch.isInitialized) {
             val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
-            val enabled = allowed && prefs.getBoolean("overlay_enabled", false)
-            if (overlaySwitch.isChecked != enabled) overlaySwitch.isChecked = enabled
+            if (allowed && pendingOverlayEnable) {
+                pendingOverlayEnable = false
+                prefs.edit().putBoolean("overlay_enabled", true).apply()
+                log("悬浮窗权限已开启，同步时会显示进度")
+            }
+            // 权限被系统撤回时只更新界面，不改写用户配置；权限恢复后可自动恢复。
+            val enabled = pendingOverlayEnable || (allowed && prefs.getBoolean("overlay_enabled", false))
+            if (overlaySwitch.isChecked != enabled) {
+                updatingOverlaySwitch = true
+                overlaySwitch.isChecked = enabled
+                updatingOverlaySwitch = false
+            }
         }
     }
 

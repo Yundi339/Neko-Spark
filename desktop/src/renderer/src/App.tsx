@@ -86,6 +86,7 @@ export default function App(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const clearTimer = useRef<number | null>(null)
   const lastSyncRefresh = useRef({ startedAt: 0, received: 0 })
+  const refreshGeneration = useRef(0)
 
   const base = status?.hub.running ? apiBase(status.hub.port) : ''
   const userStickers = useUserStickers(base)
@@ -117,17 +118,22 @@ export default function App(): JSX.Element {
   const refreshLibrary = useCallback(
     async (api: string) => {
       if (!api) return
+      const generation = ++refreshGeneration.current
       try {
         // 状态一起刷新：回收站的角标数就在 status.counts.trash 里，
         // 不刷的话删完东西侧栏数字要等 15 秒轮询才变
         const [mediaList, deviceList] = await Promise.all([fetchMedia(api), fetchDevices(api), refreshStatus()])
+        // 上传期间可能在前一个请求完成前再次触发刷新；旧响应不能覆盖刚收到的新列表。
+        if (generation !== refreshGeneration.current) return
         setMedia(mediaList)
         setDevices(deviceList)
         setError('')
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        if (generation === refreshGeneration.current) {
+          setError(err instanceof Error ? err.message : String(err))
+        }
       } finally {
-        setLoading(false)
+        if (generation === refreshGeneration.current) setLoading(false)
       }
     },
     [refreshStatus]
