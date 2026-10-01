@@ -364,14 +364,19 @@ class HubClient(
                 var skipped = 0L
                 while (skipped < start) {
                     val step = stream.skip(start - skipped)
-                    if (step <= 0) break
-                    skipped += step
+                    if (step > 0) {
+                        skipped += step
+                    } else {
+                        // ContentResolver 的 skip() 允许返回 0，即使尚未到 EOF；不能因此从错误偏移上传。
+                        if (stream.read() < 0) throw IOException("文件流短于断点偏移")
+                        skipped += 1
+                    }
                 }
                 val buffer = ByteArray(256 * 1024)
                 var remaining = length
                 while (remaining > 0) {
                     val read = stream.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                    if (read <= 0) break
+                    if (read <= 0) throw IOException("文件流长度不足")
                     sink.write(buffer, 0, read)
                     remaining -= read
                 }
@@ -436,8 +441,11 @@ class HubClient(
         }
 
         private fun isPrivateOrLocalHost(host: String): Boolean {
-            if (host == "localhost" || host.endsWith(".local") || host == "::1" || host == "[::1]" || host.startsWith("fe80:")) return true
-            val parts = host.split('.')
+            val normalized = host.trim().removePrefix("[").removeSuffix("]").lowercase()
+            val withoutZone = normalized.substringBefore('%')
+            if (withoutZone == "localhost" || withoutZone.endsWith(".local") || withoutZone == "::1") return true
+            if (withoutZone.startsWith("fe80:") || withoutZone.startsWith("fc") || withoutZone.startsWith("fd")) return true
+            val parts = withoutZone.split('.')
             if (parts.size != 4 || parts.any { it.toIntOrNull() !in 0..255 }) return false
             val first = parts[0].toInt()
             val second = parts[1].toInt()
