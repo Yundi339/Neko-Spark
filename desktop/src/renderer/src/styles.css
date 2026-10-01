@@ -414,6 +414,12 @@ button {
   align-items: start;
 }
 
+/* 设备/设置页使用明确的主次栏，避免卡片随着窗口宽度随机换位。 */
+.devices-grid,
+.settings-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
+}
+
 .span-2 {
   grid-column: span 2;
 }
@@ -421,6 +427,11 @@ button {
 @media (max-width: 1100px) {
   .span-2 {
     grid-column: span 1;
+  }
+
+  .devices-grid,
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -449,6 +460,12 @@ button {
 
 .card-head h2 {
   margin: 0;
+}
+
+.card-subtitle {
+  margin: 5px 0 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
 }
 
 .card > h2 {
@@ -729,6 +746,11 @@ button {
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
+}
+
+.pairing-label {
+  color: var(--text-dim);
+  font-size: 12.5px;
 }
 
 .pairing-code {

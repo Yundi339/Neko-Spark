@@ -171,11 +171,7 @@ class SyncService : Service() {
     private fun begin(kind: SyncKind, title: String, detail: String) {
         _state.value = SyncState(running = true, kind = kind, percent = -1, title = title, detail = detail)
         acquireWakeLock()
-        val overlayEnabled = getSharedPreferences("gallery_mirror", MODE_PRIVATE)
-            .getBoolean("overlay_enabled", false)
-        if (overlayEnabled) {
-            progressOverlay = SyncProgressOverlay(this).also { it.show(-1) }
-        }
+        // 先把服务提升为前台服务，再创建覆盖层；部分 Android 版本会拒绝后台服务直接添加悬浮窗。
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -186,6 +182,11 @@ class SyncService : Service() {
                 0
             }
         )
+        val overlayEnabled = getSharedPreferences("gallery_mirror", MODE_PRIVATE)
+            .getBoolean("overlay_enabled", false)
+        if (overlayEnabled) {
+            progressOverlay = SyncProgressOverlay(this).also { it.show(-1) }
+        }
         lastNotifyAt = 0L
         lastNotifyPercent = -2
     }

@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron'
 import {
   APP_NAME,
   PROTOCOL_VERSION,
@@ -55,10 +55,62 @@ let startupError = ''
 let taskCounter = 0
 let hubToken = ''
 let hubTls: HubTlsCredentials | null = null
+let tray: Tray | null = null
+let isQuitting = false
 
 function send(channel: string, payload?: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload)
+  }
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function createTray(): void {
+  if (tray) return
+  // 打包后的 buildResources 不会自动放进 asar，显式复制一份托盘图标到 resources/assets。
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'assets', 'tray.png')
+    : join(process.cwd(), 'build', 'icon.png')
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) {
+    console.error('[tray] 托盘图标加载失败')
+    return
+  }
+  try {
+    const nextTray = new Tray(icon)
+    tray = nextTray
+    nextTray.setToolTip(APP_NAME)
+    nextTray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: '打开 Neko_Spark', click: showMainWindow },
+        {
+          label: '打开相册仓库',
+          click: () => void shell.openPath(paths?.dataDir ?? dataDir)
+        },
+        { type: 'separator' },
+        {
+          label: '退出 Neko_Spark',
+          click: () => {
+            isQuitting = true
+            app.quit()
+          }
+        }
+      ])
+    )
+    nextTray.on('click', showMainWindow)
+  } catch (error) {
+    // 没有系统托盘的桌面环境仍应保留主界面和 Hub，不让托盘初始化拖垮应用启动。
+    console.error('[tray] 创建托盘失败:', error instanceof Error ? error.message : String(error))
+    tray = null
   }
 }
 
@@ -165,6 +217,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+    // 关闭窗口只隐藏到托盘，避免用户以为 Hub 已经停止、手机同步被中断。
+    event.preventDefault()
+    mainWindow?.hide()
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -391,6 +449,7 @@ app.whenReady().then(async () => {
   await bootstrap()
   installHubCertificateHandler()
   createWindow()
+  createTray()
 
   if (startupError) {
     dialog.showErrorBox('本地服务启动失败', startupError)
@@ -405,7 +464,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
 app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
   thumbPool.shutdown()
   void hub?.stop()
   try {

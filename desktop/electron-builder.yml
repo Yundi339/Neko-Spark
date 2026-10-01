@@ -33,6 +33,8 @@ extraResources:
   # 素材原图（prepare-stickers.mjs 的输入，界面不直接读）；一起带上便于二次加工
   - from: ../GalleryMirrorData/nekoha-originals
     to: assets/nekoha-originals
+  - from: build/icon.png
+    to: assets/tray.png
 win:
   # 图标 = 侧栏那个猫猫头（assets/stickers/logo.png）；
   # build/icon.ico 由 `.cache/make-icon.mjs` 生成（7 个尺寸：16~256）。
