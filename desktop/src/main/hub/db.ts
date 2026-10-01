@@ -557,7 +557,8 @@ export class Database {
     const placeholders = ids.map(() => '?').join(',')
     const rows = this.raw
       .prepare(
-        `SELECT id, device_id, relative_path, display_name, blob_sha256 FROM media WHERE id IN (${placeholders})`
+        `SELECT id, device_id, relative_path, display_name, blob_sha256 FROM media
+         WHERE deleted = 1 AND id IN (${placeholders})`
       )
       .all(...ids) as {
       id: number
@@ -622,6 +623,13 @@ export class Database {
 
   blobExists(sha256: string): boolean {
     return !!this.raw.prepare('SELECT 1 FROM blobs WHERE sha256 = ?').get(sha256)
+  }
+
+  blobSize(sha256: string): number | undefined {
+    const row = this.raw.prepare('SELECT size FROM blobs WHERE sha256 = ?').get(sha256) as
+      | { size: number | bigint }
+      | undefined
+    return row ? Number(row.size) : undefined
   }
 
   insertBlob(sha256: string, size: number, mime?: string): void {
