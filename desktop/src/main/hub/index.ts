@@ -229,6 +229,29 @@ function isValidDevice(device: unknown): boolean {
   )
 }
 
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isValidOptionalMediaFields(item: MediaItem): boolean {
+  const safeNonNegativeInt = (value: unknown): boolean => value === undefined || isSafeNonNegativeInteger(value)
+  return (
+    safeNonNegativeInt(item.width) &&
+    safeNonNegativeInt(item.height) &&
+    safeNonNegativeInt(item.orientation) &&
+    safeNonNegativeInt(item.dateTaken) &&
+    safeNonNegativeInt(item.dateModified) &&
+    safeNonNegativeInt(item.dateAdded) &&
+    safeNonNegativeInt(item.durationMs) &&
+    (item.isFavorite === undefined || typeof item.isFavorite === 'boolean') &&
+    (item.isMotionPhoto === undefined || typeof item.isMotionPhoto === 'boolean') &&
+    (item.size === undefined || isSafeNonNegativeInteger(item.size)) &&
+    (item.bucketId === undefined || isSafeText(item.bucketId)) &&
+    (item.bucketName === undefined || isSafeText(item.bucketName, 255)) &&
+    (item.mimeType === undefined || isSafeText(item.mimeType, 255))
+  )
+}
+
 function isValidMediaItem(item: unknown): item is MediaItem {
   if (!item || typeof item !== 'object') return false
   const value = item as MediaItem
@@ -238,21 +261,55 @@ function isValidMediaItem(item: unknown): item is MediaItem {
     isSafeRelativePath(value.relativePath) &&
     Number.isSafeInteger(value.size) &&
     value.size >= 0 &&
-    (value.bucketId === undefined || isSafeText(value.bucketId)) &&
-    (value.bucketName === undefined || isSafeText(value.bucketName, 255)) &&
-    (value.mimeType === undefined || isSafeText(value.mimeType, 255))
+    isValidOptionalMediaFields(value)
   )
 }
 
 function isSafeMediaIdentity(item: unknown): item is MediaItem {
   if (!item || typeof item !== 'object') return false
   const value = item as MediaItem
-  return /^[0-9a-f]{64}$/.test(value.sha256) && isSafeFileName(value.displayName) && isSafeRelativePath(value.relativePath)
+  return (
+    /^[0-9a-f]{64}$/.test(value.sha256) &&
+    isSafeFileName(value.displayName) &&
+    isSafeRelativePath(value.relativePath) &&
+    isValidOptionalMediaFields(value)
+  )
 }
 
-function parseIds(value: unknown): number[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ID_LIST) return []
-  return [...new Set(value.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+function parseIds(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ID_LIST) return null
+  if (value.some((id) => !Number.isSafeInteger(id) || Number(id) <= 0)) return null
+  return [...new Set(value as number[])]
+}
+
+function hasSupportedProtocol(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (body as { protocolVersion?: unknown }).protocolVersion === PROTOCOL_VERSION
+}
+
+function sendUnsupportedProtocol(res: ServerResponse): void {
+  sendJson(res, 426, { error: 'unsupported_protocol', protocolVersion: PROTOCOL_VERSION })
+}
+
+function parseByteRange(value: string, size: number): { start: number; end: number } | null {
+  if (size <= 0) return null
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim())
+  if (!match || (!match[1] && !match[2])) return null
+
+  let start: number
+  let end: number
+  if (!match[1]) {
+    const suffixLength = Number(match[2])
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null
+    start = Math.max(0, size - suffixLength)
+    end = size - 1
+  } else {
+    start = Number(match[1])
+    if (!Number.isSafeInteger(start) || start < 0 || start >= size) return null
+    end = match[2] ? Number(match[2]) : size - 1
+    if (!Number.isSafeInteger(end) || end < start) return null
+    end = Math.min(end, size - 1)
+  }
+  return { start, end }
 }
 
 function isTrustedOrigin(origin: string): boolean {
@@ -277,7 +334,7 @@ function canIngestItem(item: MediaItem): boolean {
   return isValidMediaItem(item)
 }
 
-function mediaItemToInput(deviceId: string, item: MediaItem): NewMediaInput {
+function mediaItemToInput(deviceId: string, item: MediaItem, actualBlobSize = item.size): NewMediaInput {
   const ext = item.displayName.includes('.') ? item.displayName.slice(item.displayName.lastIndexOf('.')) : ''
   const kind = detectKind(`x${ext}`) ?? (item.mimeType?.startsWith('video') ? 'video' : 'image')
   const relativePath = item.relativePath || ''
@@ -290,7 +347,8 @@ function mediaItemToInput(deviceId: string, item: MediaItem): NewMediaInput {
     bucketName: item.bucketName || (relativePath ? relativePath.replace(/\/$/, '').split('/').pop() ?? '' : ''),
     kind,
     mime: item.mimeType || guessMime(item.displayName),
-    size: item.size,
+    // 原始 blob 的实际大小优先，避免客户端元数据写错后污染恢复时的去重判断。
+    size: actualBlobSize,
     width: item.width,
     height: item.height,
     orientation: item.orientation,
@@ -462,6 +520,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Vary', 'Origin')
     }
+    res.setHeader('X-Content-Type-Options', 'nosniff')
     // ⚠️ 必须带上 Range：渲染端读视频 moov 盒子算帧率时会带 Range 头去 fetch，
     //    不带 Range 的话预检失败，浏览器直接拦掉请求（帧率就永远取不到）
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Content-Range, Range, X-Gallery-Mirror-Token')
@@ -506,6 +565,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           return
         }
         const body = await readJsonBody<{ code?: unknown; device?: unknown }>(req)
+        if (!hasSupportedProtocol(body)) {
+          sendUnsupportedProtocol(res)
+          return
+        }
         // 新版手机会在配对时带上设备身份；旧版只发送 code，仍按兼容路径放行，
         // 后续 manifest/commit 会补登记。带了设备字段却不合法时不能静默丢弃，
         // 否则手机会显示“配对成功”，电脑端却永远没有对应设备。
@@ -597,6 +660,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // GET /api/v1/thumb/:id
       if (method === 'GET' && segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'thumb' && segments[3]) {
         const id = Number(segments[3])
+        if (!Number.isSafeInteger(id) || id <= 0) {
+          sendJson(res, 400, { error: 'invalid_media_id' })
+          return
+        }
         // 回收站里的也要能出缩略图（用户得看得见自己删了什么才好挑着恢复）
         const media = db.getMediaAny(id)
         if (!media) {
@@ -656,6 +723,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // 协议承诺"不转码、不压缩、不改名"——必须是原始字节。所以预览另起一条路。
       if (method === 'GET' && segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'preview' && segments[3]) {
         const id = Number(segments[3])
+        if (!Number.isSafeInteger(id) || id <= 0) {
+          sendJson(res, 400, { error: 'invalid_media_id' })
+          return
+        }
         const media = db.getMediaAny(id)
         // 只有图片谈得上"生成预览"（视频由 Chromium 自己播，走 /file 的 Range）
         if (!media || media.kind !== 'image') {
@@ -684,6 +755,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // GET /api/v1/file/:id （支持 Range，供视频播放）
       if (method === 'GET' && segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'file' && segments[3]) {
         const id = Number(segments[3])
+        if (!Number.isSafeInteger(id) || id <= 0) {
+          sendJson(res, 400, { error: 'invalid_media_id' })
+          return
+        }
         const media = db.getMediaAny(id)
         if (!media) {
           sendJson(res, 404, { error: 'not_found' })
@@ -701,16 +776,13 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         const range = req.headers.range
         const contentType = media.mime || 'application/octet-stream'
         if (range) {
-          const match = /bytes=(\d*)-(\d*)/.exec(range)
-          let start = match?.[1] ? Number(match[1]) : 0
-          let end = match?.[2] ? Number(match[2]) : info.size - 1
-          if (Number.isNaN(start) || start < 0) start = 0
-          if (Number.isNaN(end) || end >= info.size) end = info.size - 1
-          if (start > end) {
+          const parsedRange = parseByteRange(range, info.size)
+          if (!parsedRange) {
             res.writeHead(416, { 'Content-Range': `bytes */${info.size}` })
             res.end()
             return
           }
+          const { start, end } = parsedRange
           res.writeHead(206, {
             'Content-Type': contentType,
             'Content-Length': end - start + 1,
@@ -820,12 +892,16 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           sendJson(res, 400, { error: 'missing_params' })
           return
         }
+        if (!db.getDevice(sourceId) || !db.getDevice(targetId)) {
+          sendJson(res, 404, { error: 'device_not_found' })
+          return
+        }
         try {
           const result = db.mergeDevices(sourceId, targetId)
           notifyChanged()
           sendJson(res, 200, { ok: true, ...result })
-        } catch (err) {
-          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        } catch {
+          sendJson(res, 400, { error: 'device_merge_failed' })
         }
         return
       }
@@ -836,6 +912,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         const deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : ''
         if (!isSafeText(deviceId, MAX_DEVICE_ID, false)) {
           sendJson(res, 400, { error: 'missing_params' })
+          return
+        }
+        if (!db.getDevice(deviceId)) {
+          sendJson(res, 404, { error: 'device_not_found' })
           return
         }
         const result = db.splitDevice(deviceId)
@@ -853,6 +933,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           sendJson(res, 400, { error: 'missing_params' })
           return
         }
+        if (!db.getDevice(deviceId)) {
+          sendJson(res, 404, { error: 'device_not_found' })
+          return
+        }
         const ok = db.renameDevice(deviceId, name)
         if (ok) notifyChanged()
         sendJson(res, 200, { ok })
@@ -862,8 +946,12 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/favorite
       if (method === 'POST' && url.pathname === '/api/v1/favorite') {
         const body = await readJsonBody<{ id?: number; favorite?: boolean }>(req)
-        if (!Number.isSafeInteger(body?.id) || Number(body.id) <= 0) {
+        if (!Number.isSafeInteger(body?.id) || Number(body.id) <= 0 || typeof body.favorite !== 'boolean') {
           sendJson(res, 400, { error: 'missing_id' })
+          return
+        }
+        if (!db.getMediaAny(Number(body.id))) {
+          sendJson(res, 404, { error: 'media_not_found' })
           return
         }
         db.setFavorite(Number(body.id), !!body.favorite)
@@ -887,7 +975,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/media/trash') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
         const ids = parseIds(body?.ids)
-        if (ids.length === 0) {
+        if (!ids || ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
         }
@@ -901,7 +989,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/media/restore') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
         const ids = parseIds(body?.ids)
-        if (ids.length === 0) {
+        if (!ids || ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
         }
@@ -915,7 +1003,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/media/purge') {
         const body = await readJsonBody<{ ids?: number[] }>(req)
         const ids = parseIds(body?.ids)
-        if (ids.length === 0) {
+        if (!ids || ids.length === 0) {
           sendJson(res, 400, { error: 'missing_ids' })
           return
         }
@@ -942,7 +1030,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
             received = 0
           }
         }
-        const payload: UploadStatus = { exists, received, size: 0 }
+        const payload: UploadStatus = { exists, received, size: exists ? db.blobSize(sha) ?? 0 : 0 }
         sendJson(res, 200, payload)
         return
       }
@@ -966,6 +1054,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         const rangeHeader = req.headers['content-range']
         let offset = 0
         let total = 0
+        let totalKnown = false
         let expectedChunkLength = 0
         const rawLength = req.headers['content-length']
         const contentLength = typeof rawLength === 'string' && /^\d+$/.test(rawLength) ? Number(rawLength) : undefined
@@ -983,6 +1072,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           const end = Number(match[2])
           offset = start
           total = Number(match[3])
+          totalKnown = true
           expectedChunkLength = end - start + 1
           if (
             !Number.isSafeInteger(start) ||
@@ -1007,9 +1097,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           if (contentLength !== undefined) {
             expectedChunkLength = contentLength
             if (total === 0) total = offset + contentLength
+            totalKnown = true
           }
         }
-        if (total > 0 && offset + expectedChunkLength > total) {
+        if (totalKnown && offset + expectedChunkLength > total) {
           sendJson(res, 400, { error: 'invalid_upload_range' })
           return
         }
@@ -1017,7 +1108,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         // 断点续传：如果本地没有分片文件，只能从 0 开始
         if (offset > 0 && !existsSync(partPath)) {
           offset = 0
-          if (expectedChunkLength > 0 && total < expectedChunkLength) {
+          if (expectedChunkLength > 0 && totalKnown && total < expectedChunkLength) {
             sendJson(res, 400, { error: 'invalid_upload_range' })
             return
           }
@@ -1044,7 +1135,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
 
         const info = await stat(partPath)
         const received = info.size
-        if ((expectedChunkLength > 0 && received - offset !== expectedChunkLength) || (total > 0 && received > total)) {
+        if ((expectedChunkLength > 0 && received - offset !== expectedChunkLength) || (totalKnown && received > total)) {
           activeUploads.delete(sha)
           sendJson(res, 400, { error: 'invalid_upload_size' })
           return
@@ -1056,7 +1147,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           emitSync()
         }
 
-        if (total > 0 && received >= total) {
+        if (totalKnown && received >= total) {
           const actual = await hashFile(partPath)
           if (actual !== sha) {
             await rm(partPath, { force: true })
@@ -1077,7 +1168,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
             for (const meta of metas) {
               const { relativePath, displayName } = meta.item
               if (!db.isTombstoned(meta.deviceId, relativePath || '', displayName)) {
-                db.insertMedia(mediaItemToInput(meta.deviceId, meta.item))
+                db.insertMedia(mediaItemToInput(meta.deviceId, meta.item, received))
                 inserted = true
               }
             }
@@ -1107,16 +1198,30 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // 老客户端不发这个请求也不影响（电脑端就按原来的样子，只在收到清单后才显示进度）
       if (method === 'POST' && url.pathname === '/api/v1/sync/prepare') {
         const body = await readJsonBody<SyncPrepareRequest>(req)
+        if (!hasSupportedProtocol(body)) {
+          sendUnsupportedProtocol(res)
+          return
+        }
         const device = body?.device
         const deviceId = device?.deviceId ?? ''
         if (!isValidDevice(device)) {
           sendJson(res, 400, { error: 'invalid_device' })
           return
         }
+        if (
+          [body.total, body.totalBytes, body.hashed, body.hashedBytes].some(
+            (value) => value !== undefined && !isSafeNonNegativeInteger(value)
+          )
+        ) {
+          sendJson(res, 400, { error: 'invalid_progress' })
+          return
+        }
         // 换了一台手机 / 上一轮已结束 → 开一段新的准备会话
         const isNewSession = !sync || sync.deviceId !== deviceId || sync.done
+        let deviceRegistered = false
         if (isNewSession) {
           if (deviceId) {
+            deviceRegistered = !db.getDevice(deviceId)
             db.upsertDevice({
               id: deviceId,
               name: device.name || deviceId,
@@ -1141,6 +1246,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
             startedAt: Date.now()
           }
         }
+        if (deviceRegistered) notifyChanged()
         if (sync) {
           sync.phase = 'preparing'
           if (Number(body?.total) > 0) sync.prepareTotal = Number(body.total)
@@ -1158,6 +1264,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/manifest
       if (method === 'POST' && url.pathname === '/api/v1/manifest') {
         const body = await readJsonBody<ManifestRequest>(req)
+        if (!hasSupportedProtocol(body)) {
+          sendUnsupportedProtocol(res)
+          return
+        }
         const items = body?.items ?? []
         const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
         if (!isValidDevice(body?.device) || !Array.isArray(items) || items.length > 250000 || invalidIndex >= 0) {
@@ -1200,6 +1310,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         let ingested = 0
         const device = body.device
         if (device?.deviceId) {
+          const deviceWasKnown = Boolean(db.getDevice(device.deviceId))
           db.upsertDevice({
             id: device.deviceId,
             name: device.name || device.deviceId,
@@ -1226,7 +1337,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
             // 删过的条目绝不入库（insertMedia 的 UPSERT 会把 deleted 清回 0，直接"复活"）
             if (tombstoned.has(keyOf(item))) continue
             if (knownShas.has(item.sha256)) {
-              db.insertMedia(mediaItemToInput(device.deviceId, item))
+              const actualSize = db.blobSize(item.sha256)
+              if (actualSize === undefined) continue
+              db.insertMedia(mediaItemToInput(device.deviceId, item, actualSize))
               ingested += 1
             } else {
               const metas = pendingMeta.get(item.sha256) ?? []
@@ -1234,7 +1347,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
               pendingMeta.set(item.sha256, metas)
             }
           }
-          if (markedMissing > 0 || ingested > 0) notifyChanged()
+          if (!deviceWasKnown || markedMissing > 0 || ingested > 0) notifyChanged()
         }
 
         // 开始一次同步会话：电脑端据此显示进度条
@@ -1271,6 +1384,10 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       // POST /api/v1/commit
       if (method === 'POST' && url.pathname === '/api/v1/commit') {
         const body = await readJsonBody<CommitRequest>(req)
+        if (!hasSupportedProtocol(body)) {
+          sendUnsupportedProtocol(res)
+          return
+        }
         const device = body?.device
         const items = body?.items
         const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
@@ -1308,7 +1425,12 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
             skipped += 1
             continue
           }
-          db.insertMedia(mediaItemToInput(device.deviceId, item))
+          const actualSize = db.blobSize(item.sha256)
+          if (actualSize === undefined) {
+            skipped += 1
+            continue
+          }
+          db.insertMedia(mediaItemToInput(device.deviceId, item, actualSize))
           inserted += 1
         }
         db.touchDeviceSync(device.deviceId)

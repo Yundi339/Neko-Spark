@@ -72,11 +72,12 @@ export async function fetchDevices(base: string): Promise<DeviceRecord[]> {
 }
 
 export async function setFavorite(base: string, id: number, favorite: boolean): Promise<void> {
-  await fetch(`${base}/favorite`, {
+  const res = await fetch(`${base}/favorite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, favorite })
   })
+  if (!res.ok) throw new Error(`收藏操作失败：${res.status}`)
 }
 
 /** 回收站列表（顺手带上保留天数，倒计时以服务端为准） */
@@ -130,9 +131,10 @@ export async function purgeMedia(
 
 /** 修改设备显示名（手机端和电脑端都可以改） */
 export async function renameDevice(base: string, deviceId: string, name: string): Promise<void> {
-  await fetch(`${base}/device/rename`, {
+  const res = await fetch(`${base}/device/rename`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ deviceId, name })
   })
+  if (!res.ok) throw new Error(`重命名设备失败：${res.status}`)
 }

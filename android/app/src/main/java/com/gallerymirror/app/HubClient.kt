@@ -184,6 +184,19 @@ class HubClient(
     ) {
         val chunkSize = 8L * 1024 * 1024
         var offset = uploadStatus(sha256)
+        if (entry.size == 0L) {
+            // 空文件也要落成一个已校验的 blob；直接 return 会让 commit 永远找不到它。
+            val request = request("/api/v1/blob/$sha256")
+                .put(RangeRequestBody(resolver, entry.uri, entry.mimeType, 0L, 0L))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful || !JSONObject(text).optBoolean("complete")) {
+                    throw IOException("上传空文件失败 HTTP ${response.code}")
+                }
+            }
+            return
+        }
         if (offset >= entry.size) return
         offset = (offset / chunkSize) * chunkSize
 
