@@ -1195,7 +1195,13 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           // 流式入库（清单阶段）：
           //   数据已经在电脑上的（上次中断未入库的、断点续传的）→ 立刻建好媒体记录
           //   还需要上传的 → 暂存元数据，等 blob 落盘那一刻入库
-          pendingMeta.clear()
+          // 只清理同一设备的旧清单，不能 clear 整张表：两台手机同时上传时，
+          // 后到的 manifest 会把先到设备的元数据抹掉，blob 虽然传完却没有媒体记录。
+          for (const [sha, metas] of pendingMeta) {
+            const remaining = metas.filter((meta) => meta.deviceId !== device.deviceId)
+            if (remaining.length > 0) pendingMeta.set(sha, remaining)
+            else pendingMeta.delete(sha)
+          }
           for (const item of items) {
             if (!canIngestItem(item)) continue
             // 删过的条目绝不入库（insertMedia 的 UPSERT 会把 deleted 清回 0，直接"复活"）

@@ -104,6 +104,18 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
                 params.setPreviewSize(selected.width, selected.height)
                 previewSize = selected
             }
+            // 旧 Camera API 在部分国产 ROM 上不会自动连续对焦；优先使用连续拍照，
+            // 否则二维码需要用户反复点屏幕才能清晰，扫描页看起来像没有反应。
+            val focusModes = params.supportedFocusModes.orEmpty()
+            val focusMode = when {
+                focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE) ->
+                    Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE
+                focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO) ->
+                    Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO
+                focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO) -> Camera.Parameters.FOCUS_MODE_AUTO
+                else -> null
+            }
+            if (focusMode != null) params.focusMode = focusMode
             opened.parameters = params
             val size = opened.parameters.previewSize ?: previewSize
             if (size != null) {
@@ -158,7 +170,13 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
 
     private fun decode(bytes: ByteArray, width: Int, height: Int): String? {
         val source = PlanarYUVLuminanceSource(bytes, width, height, 0, 0, width, height, false)
-        val variants = listOf(source, source.rotateCounterClockwise(), source.rotateCounterClockwise().rotateCounterClockwise())
+        val rotated90 = source.rotateCounterClockwise()
+        val variants = listOf(
+            source,
+            rotated90,
+            rotated90.rotateCounterClockwise(),
+            rotated90.rotateCounterClockwise().rotateCounterClockwise()
+        )
         for (variant in variants) {
             try {
                 return MultiFormatReader().run { setHints(hints); decodeWithState(BinaryBitmap(HybridBinarizer(variant))).text }
