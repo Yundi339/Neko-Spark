@@ -125,7 +125,8 @@ async function bootstrap(): Promise<void> {
       port: Number(process.env.GALLERY_MIRROR_PORT) || undefined,
       onDataChanged: () => send('data:changed'),
       onTaskProgress: (progress) => send('task:progress', progress),
-      onSyncProgress: (progress) => send('sync:progress', progress)
+      onSyncProgress: (progress) => send('sync:progress', progress),
+      onPairing: () => send('pairing:completed')
     })
     const url = hub.status.addresses[0] ?? `https://127.0.0.1:${hub.status.port}`
     console.log(`[hub] 已启动: ${url}`)

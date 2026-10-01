@@ -23,7 +23,7 @@ class BackupRunner(private val context: Context) {
 
     fun deviceName(): String {
         prefs.getString("device_name", null)?.takeIf { it.isNotBlank() }?.let { return it }
-        return "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+        return "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim().ifBlank { "Android 手机" }
     }
 
     data class Result(
@@ -127,7 +127,11 @@ class BackupRunner(private val context: Context) {
     /** 计算 SHA-256，带缓存（同一文件不变则不重复计算） */
     private fun sha256Of(entry: MediaEntry): String {
         val key = "sha:${entry.id}:${entry.size}:${entry.dateModified}"
-        prefs.getString(key, null)?.let { return it }
+        prefs.getString(key, null)?.trim()?.let { cached ->
+            // 旧版本或异常中断可能留下空/非 SHA 缓存；不能把它直接发给 Hub，否则 manifest 会整体 400。
+            if (cached.matches(Regex("[0-9a-fA-F]{64}"))) return cached.lowercase()
+            prefs.edit().remove(key).apply()
+        }
 
         val digest = MessageDigest.getInstance("SHA-256")
         context.contentResolver.openInputStream(entry.uri)?.use { input ->

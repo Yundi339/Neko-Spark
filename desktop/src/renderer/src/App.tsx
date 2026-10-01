@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'rea
 import type { AlbumRecord, AppStatus, DeviceRecord, MediaRecord, SyncProgress, TaskProgress } from '@shared/types'
 import Sidebar, { ALL_DEVICES, type ViewKey } from './components/Sidebar'
 import SettingsView from './components/SettingsView'
+import PairingPopup from './components/PairingPopup'
 import Viewer from './components/Viewer'
 import AlbumsView from './views/AlbumsView'
 import DevicesView from './views/DevicesView'
@@ -43,6 +44,7 @@ const VIEW_META: Record<ViewKey, { title: string; subtitle: string }> = {
 
 export default function App(): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null)
+  const [pairingPopupStatus, setPairingPopupStatus] = useState<AppStatus | null>(null)
   const [active, setActive] = useState<ViewKey>('timeline')
   const [media, setMedia] = useState<MediaRecord[]>([])
   const [devices, setDevices] = useState<DeviceRecord[]>([])
@@ -83,6 +85,7 @@ export default function App(): JSX.Element {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const clearTimer = useRef<number | null>(null)
+  const lastSyncRefresh = useRef({ startedAt: 0, received: 0 })
 
   const base = status?.hub.running ? apiBase(status.hub.port) : ''
   const userStickers = useUserStickers(base)
@@ -196,16 +199,30 @@ export default function App(): JSX.Element {
     })
     const offSync = window.gm.onSyncProgress((next) => {
       setSyncProgress(next)
+      // data:changed 是主要通知；同步进度再兜底触发一次，避免某些系统/并发场景丢掉单个文件的刷新事件。
+      const previous = lastSyncRefresh.current
+      if (base && (next.startedAt !== previous.startedAt || next.received > previous.received)) {
+        lastSyncRefresh.current = { startedAt: next.startedAt, received: next.received }
+        if (next.received > 0) scheduleRefresh(base)
+      }
       if (next.done) {
         window.setTimeout(() => {
           setSyncProgress((current) => (current && current.startedAt === next.startedAt ? null : current))
         }, 8000)
       }
     })
+    const offPairing = window.gm.onPairing(() => {
+      // token 只通过本地 IPC 取回，用于桌面端提示框；Hub HTTP 和 mDNS 不会返回它。
+      void window.gm.getStatus().then((next) => {
+        setStatus(next)
+        setPairingPopupStatus(next)
+      })
+    })
     return () => {
       offData()
       offProgress()
       offSync()
+      offPairing()
       if (refreshTimer.current !== null) {
         window.clearTimeout(refreshTimer.current)
         refreshTimer.current = null
@@ -702,6 +719,9 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
+      {pairingPopupStatus ? (
+        <PairingPopup status={pairingPopupStatus} onClose={() => setPairingPopupStatus(null)} />
+      ) : null}
       <Sidebar
         active={active}
         onSelect={selectView}

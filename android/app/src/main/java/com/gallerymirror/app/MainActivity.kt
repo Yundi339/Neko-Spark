@@ -165,6 +165,12 @@ class MainActivity : ComponentActivity() {
                 topMargin = dp(6)
             }
         )
+        card.addView(TextView(this).apply {
+            text = "推荐使用“搜索电脑”或“扫一扫配对”：地址、证书指纹和访问密钥会自动填写。下面两项仅供 USB/手动连接兼容旧版。"
+            textSize = 11f
+            setTextColor(colorDim)
+            setPadding(0, dp(4), 0, 0)
+        })
 
         val pairRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -192,7 +198,7 @@ class MainActivity : ComponentActivity() {
         })
         tokenInput = EditText(this).apply {
             setText(prefs.getString("hub_token", ""))
-            hint = "从电脑端设置页复制（USB 回环可留空）"
+            hint = "配对后自动填写；手动连接时再填写"
             textSize = 15f
             setTextColor(colorText)
             setHintTextColor(colorDim)
@@ -211,7 +217,7 @@ class MainActivity : ComponentActivity() {
         })
         fingerprintInput = EditText(this).apply {
             setText(prefs.getString("hub_fingerprint", ""))
-            hint = "从电脑端设置页复制（可带冒号）"
+            hint = "配对后自动填写；手动连接时填写 SHA-256"
             textSize = 15f
             setTextColor(colorText)
             setHintTextColor(colorDim)
@@ -515,11 +521,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startQrScanner() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), QrScannerActivity.REQUEST_CAMERA)
-            log("请再次点击“扫一扫配对”打开二维码扫描")
-            return
-        }
+        // 由扫描页自己申请相机权限，避免主界面申请完成后 Surface 已经错过初始化时机。
         qrScannerLauncher.launch(Intent(this, QrScannerActivity::class.java))
     }
 

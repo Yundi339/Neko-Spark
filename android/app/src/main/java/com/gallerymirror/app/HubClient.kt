@@ -121,7 +121,10 @@ class HubClient(
 
         val request = request("/api/v1/manifest").post(body).build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("manifest HTTP ${response.code}")
+            if (!response.isSuccessful) {
+                val detail = response.body?.string().orEmpty().take(240)
+                throw IOException("manifest HTTP ${response.code}: $detail")
+            }
             val json = JSONObject(response.body?.string().orEmpty())
             val neededArray = json.optJSONArray("needed") ?: JSONArray()
             val needed = HashSet<String>()
@@ -213,7 +216,10 @@ class HubClient(
 
         val request = request("/api/v1/commit").post(body).build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("commit HTTP ${response.code}")
+            if (!response.isSuccessful) {
+                val detail = response.body?.string().orEmpty().take(240)
+                throw IOException("commit HTTP ${response.code}: $detail")
+            }
             return response.body?.string().orEmpty()
         }
     }

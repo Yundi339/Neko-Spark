@@ -61,6 +61,8 @@ export interface HubOptions {
   onTaskDone?: (progress: TaskProgress) => void
   /** 手机上传进度（电脑端显示进度条） */
   onSyncProgress?: (progress: SyncProgress) => void
+  /** 手机通过一次性配对码完成首次配对；只通知本地 renderer，不携带 token。 */
+  onPairing?: () => void
 }
 
 export interface HubHandle {
@@ -386,7 +388,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
   const activeUploads = new Map<string, { received: number }>()
 
   // 本次清单的元数据暂存：blob 一落盘就立刻入库，照片边传边出现（不用等整轮同步结束）
-  const pendingMeta = new Map<string, { deviceId: string; item: MediaItem }>()
+  // 一个 blob 可能对应手机清单里的多条媒体记录（重复文件内容）；全部保留，
+  // 否则第一条传完时只会实时显示一张，剩余条目要等整轮 commit 才出现。
+  const pendingMeta = new Map<string, { deviceId: string; item: MediaItem }[]>()
 
   // 手机本次同步会话（用于电脑端进度条）
   let sync: SyncProgress | null = null
@@ -514,6 +518,7 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
         status.pairingCode = next.code
         status.pairingExpiresAt = next.expiresAt
         options.onDataChanged?.()
+        options.onPairing?.()
         sendJson(res, 200, { ok: true, token: options.authToken })
         return
       }
@@ -1041,11 +1046,18 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
           activeUploads.delete(sha)
 
           // 落盘即入库：这一张照片立刻出现在电脑界面上，不必等整轮同步结束
-          const meta = pendingMeta.get(sha)
-          if (meta) {
-            const { relativePath, displayName } = meta.item
-            if (!db.isTombstoned(meta.deviceId, relativePath || '', displayName)) {
-              db.insertMedia(mediaItemToInput(meta.deviceId, meta.item))
+          const metas = pendingMeta.get(sha)
+          if (metas) {
+            let inserted = false
+            for (const meta of metas) {
+              const { relativePath, displayName } = meta.item
+              if (!db.isTombstoned(meta.deviceId, relativePath || '', displayName)) {
+                db.insertMedia(mediaItemToInput(meta.deviceId, meta.item))
+                inserted = true
+              }
+            }
+            if (inserted) {
+              // 在文件校验完成后立即通知 renderer；缩略图生成异步进行，不阻塞媒体列表刷新。
               notifyChanged()
               scheduleThumbBackfill()
             }
@@ -1122,8 +1134,19 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/manifest') {
         const body = await readJsonBody<ManifestRequest>(req)
         const items = body?.items ?? []
-        if (!isValidDevice(body.device) || !Array.isArray(items) || items.length > 250000 || items.some((item) => !isSafeMediaIdentity(item))) {
-          sendJson(res, 400, { error: 'invalid_manifest' })
+        const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
+        if (!isValidDevice(body?.device) || !Array.isArray(items) || items.length > 250000 || invalidIndex >= 0) {
+          sendJson(res, 400, {
+            error: 'invalid_manifest',
+            reason: !isValidDevice(body?.device)
+              ? 'invalid_device'
+              : !Array.isArray(items)
+                ? 'items_not_array'
+                : items.length > 250000
+                  ? 'too_many_items'
+                  : 'invalid_media_item',
+            ...(invalidIndex >= 0 ? { index: invalidIndex } : {})
+          })
           return
         }
         // 用户在电脑上删过的（墓碑）：既不要它再传、也不要它再入库 ——
@@ -1175,7 +1198,9 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
               db.insertMedia(mediaItemToInput(device.deviceId, item))
               ingested += 1
             } else {
-              pendingMeta.set(item.sha256, { deviceId: device.deviceId, item })
+              const metas = pendingMeta.get(item.sha256) ?? []
+              metas.push({ deviceId: device.deviceId, item })
+              pendingMeta.set(item.sha256, metas)
             }
           }
           if (markedMissing > 0 || ingested > 0) notifyChanged()
@@ -1216,8 +1241,20 @@ export async function startHub(options: HubOptions): Promise<HubHandle> {
       if (method === 'POST' && url.pathname === '/api/v1/commit') {
         const body = await readJsonBody<CommitRequest>(req)
         const device = body?.device
-        if (!isValidDevice(device) || !Array.isArray(body?.items) || body.items.length > 250000 || body.items.some((item) => !isSafeMediaIdentity(item))) {
-          sendJson(res, 400, { error: 'invalid_commit' })
+        const items = body?.items
+        const invalidIndex = Array.isArray(items) ? items.findIndex((item) => !isSafeMediaIdentity(item)) : -1
+        if (!isValidDevice(device) || !Array.isArray(items) || items.length > 250000 || invalidIndex >= 0) {
+          sendJson(res, 400, {
+            error: 'invalid_commit',
+            reason: !isValidDevice(device)
+              ? 'invalid_device'
+              : !Array.isArray(items)
+                ? 'items_not_array'
+                : items.length > 250000
+                  ? 'too_many_items'
+                  : 'invalid_media_item',
+            ...(invalidIndex >= 0 ? { index: invalidIndex } : {})
+          })
           return
         }
         db.upsertDevice({
